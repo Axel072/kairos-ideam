@@ -1,0 +1,24 @@
+dataset: seasonal-monthly-single-levels
+product_type: monthly_mean
+data_format: grib
+
+# Región de prueba (no es Colombia completo). Orden CDS: N, W, S, E.
+area: {north: 6, west: -76, south: 0, east: -70}
+
+month: 5
+leadtime_months: [1, 2, 3, 4, 5, 6]
+
+variables:
+  precipitation: total_precipitation   
+  temperature: 2m_temperature
+
+centres:
+  ncep: {originating_centre: ncep, system: "2", years: [1993, 2016]}   
+  dwd:  {originating_centre: dwd, system: "22", years: [1993, 2016]}   
+  bom:  {originating_centre: bom, system: "2",  years: [1993, 2016]}   
+
+# CHIRPS v3.0 , vía UCSB (CHC). 
+# archivos anuales NetCDF globales mensuales 0.05° 
+chirps:
+  url_template: "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/netcdf/by_year/chirps-v3.0.{year}.monthly.nc"
+  years: [1993, 2016]

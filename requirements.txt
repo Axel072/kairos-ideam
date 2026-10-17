@@ -1,0 +1,10 @@
+cdsapi
+xarray
+cfgrib
+eccodes
+netCDF4
+numpy
+pandas
+pyyaml
+requests
+pytest

@@ -1,0 +1,23 @@
+# Entorno
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Credenciales (nunca versionar)
+.cdsapirc
+.env
+
+# Datos
+data/**
+!data/**/.gitkeep
+*.grib
+*.grib2
+*.idx
+*.nc
+*.tsv
+
+# Documentos 
+docs/informe_control_calidad.md
