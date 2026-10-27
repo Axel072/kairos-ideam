@@ -9,9 +9,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from ideam_seasonal.common import CENTRES, get_units, open_chirps, open_grib, unit_factor
 from ideam_seasonal.ingest import load_config
-from ideam_seasonal.verify import (CENTRES, PRECIP_UNIT_TO_MM_DAY, _chirps_open, _open_grib,
-                                   get_units)
 
 
 def reduce_lagged(ds: xr.Dataset, start_month: int, n_leads: int) -> xr.Dataset:
@@ -19,9 +18,7 @@ def reduce_lagged(ds: xr.Dataset, start_month: int, n_leads: int) -> xr.Dataset:
     var = next(iter(ds.data_vars))
     da = ds[var]
     unit = get_units(da)
-    factor = PRECIP_UNIT_TO_MM_DAY.get(unit)
-    if factor is None:
-        raise ValueError(f"unidad '{unit}' no reconocida o acumulada; no se homogeneiza")
+    factor = unit_factor(da)
     arr = da.transpose("number", "time", "step", "latitude", "longitude").values
     init = pd.DatetimeIndex(ds["time"].values)
     valid = pd.DatetimeIndex(ds["valid_time"].transpose("time", "step").values.ravel())
@@ -69,7 +66,7 @@ def chirps_by_lead(paths: list[Path], years: np.ndarray, start_month: int, n_lea
     """CHIRPS (mm/día) por (year, lead): el mes calendario `start_month + lead - 1`."""
     by_year = {}
     for p in paths:
-        ds = _chirps_open(p)
+        ds = open_chirps(p)
         da = ds["precip"]
         if "scale_factor" in da.attrs:
             raise ValueError("CHIRPS trae scale_factor; la lectura sin escalar sería errónea")
@@ -120,7 +117,7 @@ def build(raw: Path = Path("data") / "raw", processed: Path = Path("data") / "pr
 
     groups = {}
     for c in CENTRES:
-        groups[c] = reduce_lagged(_open_grib(raw / f"{c}_{variable}_m{month:02d}_box.grib"),
+        groups[c] = reduce_lagged(open_grib(raw / f"{c}_{variable}_m{month:02d}_box.grib"),
                                   month, n_leads)
     years = groups["ncep"]["year"].values
     for c, g in groups.items():

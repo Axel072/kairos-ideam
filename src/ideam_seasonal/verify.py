@@ -9,9 +9,10 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import xarray as xr
 
+from ideam_seasonal.common import (CENTRES, PRECIP_UNIT_TO_MM_DAY, get_units, open_grib,
+                                   unit_factor)
 from ideam_seasonal.ingest import load_config
 
 Result = tuple[bool, str]
@@ -19,13 +20,7 @@ Result = tuple[bool, str]
 LEAD_DIMS = ("forecastMonth", "step", "leadtime_month")
 MEMBER_DIMS = ("number", "member")
 
-PRECIP_UNIT_TO_MM_DAY = {
-    "kg m**-2 s**-1": 86400.0,
-    "m s**-1": 86400.0 * 1000.0,
-    "m": None,  
-    "mm/day": 1.0,
-}
-PRECIP_MM_DAY_RANGE = (0.0, 40.0)  
+PRECIP_MM_DAY_RANGE = (0.0, 40.0)
 
 
 def _find_dim(da: xr.DataArray, candidates) -> str | None:
@@ -43,20 +38,13 @@ def check_longitudes(ds: xr.Dataset) -> Result:
     return True, f"convención {conv}, rango {lon.min()}..{lon.max()}"
 
 
-def get_units(da: xr.DataArray) -> str | None:
-    return da.attrs.get("units") or da.attrs.get("GRIB_units")
-
-
 def check_units(da: xr.DataArray) -> Result:
     """Unidad reconocida y media plausible en mm/día."""
+    try:
+        factor = unit_factor(da)
+    except ValueError as e:
+        return False, str(e)
     unit = get_units(da)
-    if unit is None:
-        return False, "sin atributo units"
-    if unit not in PRECIP_UNIT_TO_MM_DAY:
-        return False, f"unidad '{unit}' no reconocida; agregarla tras confirmarla"
-    factor = PRECIP_UNIT_TO_MM_DAY[unit]
-    if factor is None:
-        return False, f"unidad '{unit}' es acumulada: desacumular antes de comparar"
     mean = float(da.mean()) * factor
     lo, hi = PRECIP_MM_DAY_RANGE
     if not lo <= mean <= hi:
@@ -83,7 +71,7 @@ def check_accumulation(da: xr.DataArray) -> Result:
 
 
 def verify(path: Path, var: str | None = None) -> bool:
-    ds = xr.open_dataset(path, engine="cfgrib", backend_kwargs={"indexpath": ""})
+    ds = open_grib(path)
     var = var or next(iter(ds.data_vars))
     da = ds[var]
     print(f"{path.name}  var={var}  dims={dict(da.sizes)}")
@@ -98,17 +86,6 @@ def verify(path: Path, var: str | None = None) -> bool:
 
 
 POINT = {"lat": 2.5, "lon": -73.5}
-CENTRES = ("ncep", "dwd", "bom")
-
-
-def _open_grib(path: Path) -> xr.Dataset:
-    return xr.open_dataset(path, engine="cfgrib", backend_kwargs={"indexpath": ""})
-
-
-def _chirps_open(path: Path) -> xr.Dataset:
-    ds = xr.open_dataset(path, mask_and_scale=False, decode_times=False)
-    ds["time"] = pd.to_datetime(ds["time"].values, unit="D", origin="1980-01-01")
-    return ds
 
 
 def check_chirps(paths: list[Path]) -> dict:
@@ -167,7 +144,7 @@ def build_report(raw: Path = Path("data") / "raw", processed: Path = Path("data"
     fc = {}
     for c in CENTRES:
         path = raw / f"{c}_{variable}_m{month:02d}_box.grib"
-        ds = _open_grib(path)
+        ds = open_grib(path)
         da = ds[next(iter(ds.data_vars))]
         fc[c] = {
             "units": get_units(da), "step_type": da.attrs.get("GRIB_stepType"),

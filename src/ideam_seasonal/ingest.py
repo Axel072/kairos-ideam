@@ -57,7 +57,7 @@ def download(cfg: dict, centre: str, variable: str = "precipitation",
         print(f"[cache] {target}")
         return target
 
-    import cdsapi  # tardío: los tests no necesitan credenciales
+    import cdsapi 
 
     cdsapi.Client().retrieve(cfg["dataset"], request).download(str(target))
     sidecar.write_text(json.dumps(request, indent=2), encoding="utf-8")
