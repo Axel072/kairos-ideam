@@ -22,3 +22,9 @@ centres:
 chirps:
   url_template: "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/netcdf/by_year/chirps-v3.0.{year}.monthly.nc"
   years: [1993, 2016]
+
+cpt:
+  season_leads: [2, 3, 4]
+  region: colombia
+  regions:
+    colombia: {north: 14, west: -82, south: -5, east: -66}
