@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from ideam_seasonal.common import (CENTRES, PRECIP_UNIT_TO_MM_DAY, get_units, open_grib,
-                                   unit_factor)
+from ideam_seasonal.common import (CENTRES, PRECIP_UNIT_TO_MM_DAY, TEMP_UNIT_TO_C, get_units,
+                                   is_temperature, open_grib, unit_factor)
 from ideam_seasonal.ingest import load_config
 
 Result = tuple[bool, str]
@@ -21,6 +21,7 @@ LEAD_DIMS = ("forecastMonth", "step", "leadtime_month")
 MEMBER_DIMS = ("number", "member")
 
 PRECIP_MM_DAY_RANGE = (0.0, 40.0)
+TEMP_C_RANGE = (-60.0, 45.0)
 
 
 def _find_dim(da: xr.DataArray, candidates) -> str | None:
@@ -52,6 +53,15 @@ def check_units(da: xr.DataArray) -> Result:
     return True, f"unidad '{unit}' -> media {mean:.2f} mm/día"
 
 
+def check_temperature(da: xr.DataArray) -> Result:
+    unit = get_units(da)
+    mean = float(da.mean()) + TEMP_UNIT_TO_C[unit]
+    lo, hi = TEMP_C_RANGE
+    if not lo <= mean <= hi:
+        return False, f"media {mean:.2f} °C fuera de [{lo}, {hi}] con unidad '{unit}'"
+    return True, f"unidad '{unit}' -> media {mean:.2f} °C"
+
+
 def check_accumulation(da: xr.DataArray) -> Result:
     """Acumulación por metadatos y por tendencia en la anticipación."""
     step_type = da.attrs.get("GRIB_stepType")
@@ -75,11 +85,18 @@ def verify(path: Path, var: str | None = None) -> bool:
     var = var or next(iter(ds.data_vars))
     da = ds[var]
     print(f"{path.name}  var={var}  dims={dict(da.sizes)}")
-    results = {
-        "longitudes": check_longitudes(ds),
-        "unidades": check_units(da),
-        "acumulación": check_accumulation(da),
-    }
+    if is_temperature(da):
+        results = {
+            "longitudes": check_longitudes(ds),
+            "unidades": check_temperature(da),
+            "acumulación": (True, "no aplica a temperatura"),
+        }
+    else:
+        results = {
+            "longitudes": check_longitudes(ds),
+            "unidades": check_units(da),
+            "acumulación": check_accumulation(da),
+        }
     for name, (ok, msg) in results.items():
         print(f"  [{'OK' if ok else 'FALLA'}] {name}: {msg}")
     return all(ok for ok, _ in results.values())

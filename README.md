@@ -51,6 +51,17 @@ El script se detiene en el primer paso que falle (`set -e`) y ejecuta, en orden:
 El archivo homogeneizado se lee con `xr.open_dataset(ruta, group="ncep")`. `lead` 1 es el
 mes de inicialización (mayo).
 
+Archivos de entrada de CPT (X y Z de NCEP, DWD, BOM y su promedio, para lluvia y
+temperatura), con el pronóstico más reciente del CDS y el hindcast del mismo mes de inicio:
+
+```
+bash cpt.sh                  # los tres modelos y el promedio
+bash cpt.sh --modelo ncep    # solo NCEP
+```
+
+Escribe en `data/cpt/` los archivos y un `registro_*.md` por variable. Temporada y región
+están en `config/params.yaml` (`cpt`).
+
 Tests:
 
 ```
@@ -61,12 +72,14 @@ python -m pytest
 
 ```
 run.sh                    corre el flujo completo (descarga, verificación, homogeneización, informe)
+cpt.sh                    archivos de entrada de CPT
 config/params.yaml        región, variables, años, centros
 src/ideam_seasonal/
   ingest.py               descarga (cdsapi y CHIRPS)
   common.py               constantes y helpers compartidos (unidades, lectura de GRIB/CHIRPS)
   verify.py               chequeos e informe
   homogenize.py           reducción de ensambles y dataset homogeneizado
+  cpt.py                  escritura en formato CPT
 tests/
 docs/                     hallazgos.md, informe_control_calidad.md
 data/                     no se versiona (raw/ descargas, processed/ homogeneizado)

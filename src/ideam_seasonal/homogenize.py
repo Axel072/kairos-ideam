@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ideam_seasonal.common import CENTRES, get_units, open_chirps, open_grib, unit_factor
+from ideam_seasonal.common import (CENTRES, get_units, is_temperature, open_chirps, open_grib,
+                                   to_standard)
 from ideam_seasonal.ingest import load_config
 
 
@@ -18,7 +19,10 @@ def reduce_lagged(ds: xr.Dataset, start_month: int, n_leads: int) -> xr.Dataset:
     var = next(iter(ds.data_vars))
     da = ds[var]
     unit = get_units(da)
-    factor = unit_factor(da)
+    to_standard(da, 0.0)
+    if "time" not in da.dims:
+        da = da.expand_dims("time")
+        ds = ds.assign_coords(time=da["time"], valid_time=ds["valid_time"].expand_dims("time"))
     arr = da.transpose("number", "time", "step", "latitude", "longitude").values
     init = pd.DatetimeIndex(ds["time"].values)
     valid = pd.DatetimeIndex(ds["valid_time"].transpose("time", "step").values.ravel())
@@ -43,17 +47,20 @@ def reduce_lagged(ds: xr.Dataset, start_month: int, n_leads: int) -> xr.Dataset:
         yi = np.searchsorted(years, yr)
         if len(set(zip(yi, lead))) != len(yi):
             raise ValueError(f"member {members[i]}: (año, anticipación) duplicado")
-        out[yi, i, lead - 1] = arr[i, ti, si] * factor
+        out[yi, i, lead - 1] = to_standard(da, arr[i, ti, si])
         init_time[yi, i] = init[ti].values
     partial = np.isnan(out).any(axis=(3, 4)) & ~np.isnan(out).all(axis=(3, 4))
     if np.isnan(out).any():
         raise ValueError(f"el arreglo reducido tiene {np.isnan(out).mean():.2%} NaN "
                          f"(celdas parciales: {int(partial.sum())}); no se rellena")
     lat = ds["latitude"].values
+    if is_temperature(da):
+        name, units, long_name = "tas", "Celsius", "temperatura media del aire a 2 m"
+    else:
+        name, units, long_name = "pr", "mm/day", "precipitación, tasa media mensual"
     res = xr.Dataset(
-        {"pr": (("year", "member", "lead", "lat", "lon"), out,
-                {"units": "mm/day", "source_units": unit,
-                 "long_name": "precipitación, tasa media mensual"}),
+        {name: (("year", "member", "lead", "lat", "lon"), out,
+                {"units": units, "source_units": unit, "long_name": long_name}),
          "init_time": (("year", "member"), init_time)},
         coords={"year": years, "member": members, "lead": np.arange(1, n_leads + 1),
                 "lat": lat, "lon": ds["longitude"].values})

@@ -15,6 +15,9 @@ PRECIP_UNIT_TO_MM_DAY = {
 }
 
 
+TEMP_UNIT_TO_C = {"K": -273.15, "C": 0.0, "degC": 0.0}
+
+
 def get_units(da: xr.DataArray) -> str | None:
     return da.attrs.get("units") or da.attrs.get("GRIB_units")
 
@@ -30,6 +33,16 @@ def unit_factor(da: xr.DataArray) -> float:
     if factor is None:
         raise ValueError(f"unidad '{unit}' es acumulada: desacumular antes de comparar")
     return factor
+
+
+def is_temperature(da: xr.DataArray) -> bool:
+    return get_units(da) in TEMP_UNIT_TO_C
+
+
+def to_standard(da: xr.DataArray, values):
+    if is_temperature(da):
+        return values + TEMP_UNIT_TO_C[get_units(da)]
+    return values * unit_factor(da)
 
 
 def open_grib(path: Path) -> xr.Dataset:
