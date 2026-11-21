@@ -1,6 +1,7 @@
 """Chequeos de longitudes, unidades y acumulación; cada uno devuelve (ok, mensaje).
 
 Uso:  python -m ideam_seasonal.verify data/raw/ncep_precipitation_m05_box.grib
+      python -m ideam_seasonal.verify --predictando [mes_de_inicio]
       python -m ideam_seasonal.verify --report
 """
 from __future__ import annotations
@@ -9,11 +10,13 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from ideam_seasonal.common import (CENTRES, PRECIP_UNIT_TO_MM_DAY, TEMP_UNIT_TO_C, VARIABLES,
-                                   chirps_path, get_units, is_temperature, load_config, open_grib,
-                                   processed_path, raw_path, resolve_region, unit_factor)
+                                   Region, chirps_path, get_units, is_temperature, load_config,
+                                   open_cpt_stations, open_grib, predictand_path, processed_path,
+                                   raw_path, resolve_region, unit_factor)
 
 Result = tuple[bool, str]
 
@@ -97,6 +100,102 @@ def verify(path: Path, var: str | None = None) -> bool:
             "unidades": check_units(da),
             "acumulación": check_accumulation(da),
         }
+    for name, (ok, msg) in results.items():
+        print(f"  [{'OK' if ok else 'FALLA'}] {name}: {msg}")
+    return all(ok for ok, _ in results.values())
+
+
+# --- Predictando (Y) en formato CPT de estaciones ---------------------------------------------
+
+# CPT descarta por defecto una serie con más de 10 % de faltantes (C:\CPT\CPT.ini:
+# "Maximum % of missing Y data 10").
+Y_MAX_MISSING = 0.10
+MONTHLY_TOTAL_UNITS = ("mm", "mm/month")
+
+
+def season_months(years, start_month: int, leads: list[int]) -> pd.DatetimeIndex:
+    """Meses calendario que forman la temporada (leads; lead 1 = mes de inicio) en cada año."""
+    out = []
+    for y in years:
+        for lead in leads:
+            k = start_month - 1 + lead - 1
+            out.append(pd.Timestamp(int(y) + k // 12, k % 12 + 1, 1))
+    return pd.DatetimeIndex(out)
+
+
+def check_predictand(da: xr.DataArray, variable: str, years, start_month: int,
+                     leads: list[int], region: Region) -> dict[str, Result]:
+    """Chequeos del Y: formato, longitudes, región, periodo, unidades, acumulación, faltantes."""
+    res: dict[str, Result] = {}
+    t = pd.DatetimeIndex(da["time"].values)
+    res["formato"] = (bool(t.is_monotonic_increasing and t.is_unique),
+                      f"{da.sizes['station']} estaciones, mensual {t[0]:%Y-%m}…{t[-1]:%Y-%m} "
+                      f"({t.size} meses{'' if t.is_unique else ', fechas repetidas'})")
+
+    lon, lat = da["lon"].values, da["lat"].values
+    lon_ok = bool((lon >= -180).all() and (lon <= 180).all() and (np.abs(lat) <= 90).all())
+    res["longitudes"] = (lon_ok, f"convención {'-180..180' if lon_ok else 'NO -180..180'}, "
+                                 f"lon {lon.min():.2f}…{lon.max():.2f}, lat {lat.min():.2f}…{lat.max():.2f}")
+
+    if region.area is None:
+        res["región"] = (True, "global: todas las estaciones")
+    else:
+        a = region.area
+        inside = ((lat >= a["south"]) & (lat <= a["north"]) & (lon >= a["west"]) & (lon <= a["east"]))
+        n_in = int(inside.sum())
+        msg = f"{n_in} de {inside.size} estaciones dentro de {region.name} ({region.bounds()})"
+        if 0 < n_in < inside.size:
+            msg += "; CPT excluye las de fuera por dominio"
+        res["región"] = (n_in > 0, msg)
+
+    need = season_months(years, start_month, leads)
+    absent = need.difference(t)
+    res["periodo"] = (absent.empty,
+                      f"cubre los {need.size} meses de la temporada {years[0]}–{years[-1]}"
+                      if absent.empty else
+                      f"faltan {absent.size} meses de la temporada, p. ej. "
+                      f"{', '.join(f'{m:%Y-%m}' for m in absent[:4])}")
+    sub = da.sel(time=need.intersection(t))
+
+    unit = da.attrs.get("units")
+    var = VARIABLES[variable]
+    if variable != "precipitation":
+        res["unidades"] = (False, f"chequeo de Y para '{variable}' no implementado (unidad '{unit}')")
+    elif unit in MONTHLY_TOTAL_UNITS or unit == "mm/day":
+        per_day = sub / sub["time"].dt.days_in_month if unit in MONTHLY_TOTAL_UNITS else sub
+        mean = float(per_day.mean())
+        lo, hi = var.plausible
+        ok = lo <= mean <= hi
+        kind = "total mensual" if unit in MONTHLY_TOTAL_UNITS else "tasa"
+        res["unidades"] = (ok, f"unidad '{unit}' ({kind}) -> media {mean:.2f} mm/día en la temporada"
+                               + ("" if ok else f", fuera de [{lo}, {hi}]"))
+    else:
+        res["unidades"] = (False, f"unidad '{unit}' no reconocida para precipitación")
+
+    # Acumulado desde enero (o desde la inicialización) crecería mes a mes dentro de cada año.
+    full_years = [y for y, g in da.groupby("time.year") if g.sizes["time"] == 12]
+    growing = [y for y in full_years
+               if np.all(np.diff(da.sel(time=str(y)).mean("station").values) > 0)]
+    acc_ok = len(growing) <= len(full_years) / 2
+    res["acumulación"] = (acc_ok, f"{'total por mes' if acc_ok else 'crece mes a mes: ¿acumulado?'}"
+                                  f" ({len(growing)} de {len(full_years)} años completos crecen "
+                                  "todos los meses)")
+
+    frac = float(sub.isnull().mean()) if sub.size else 1.0
+    worst = sub.isnull().mean("time")
+    res["faltantes"] = (frac <= Y_MAX_MISSING and bool((worst <= Y_MAX_MISSING).all()),
+                        f"{frac:.1%} en la temporada; peor estación {float(worst.max()):.1%} "
+                        f"(máximo que admite CPT por defecto: {Y_MAX_MISSING:.0%})")
+    return res
+
+
+def verify_predictand(path: Path, variable: str, years, start_month: int, leads: list[int],
+                      region: Region) -> bool:
+    if not Path(path).exists():
+        raise FileNotFoundError(f"no existe el predictando {path}")
+    da = open_cpt_stations(Path(path))
+    print(f"{Path(path).name}  Y  field={da.attrs.get('field')}  dims={dict(da.sizes)}")
+    results = check_predictand(da, variable, list(years), start_month, leads, region)
     for name, (ok, msg) in results.items():
         print(f"  [{'OK' if ok else 'FALLA'}] {name}: {msg}")
     return all(ok for ok, _ in results.values())
@@ -223,8 +322,23 @@ def build_report(raw: Path = Path("data") / "raw", processed: Path = Path("data"
     return out
 
 
+def _verify_configured_predictand(start_month: int) -> bool:
+    """Y de lluvia configurado, contra el hindcast de NCEP, la temporada y la región de CPT."""
+    cfg = load_config()
+    path = predictand_path(cfg, "precipitation")
+    if path is None:
+        raise SystemExit("no hay predictando configurado en config/params.yaml (predictand)")
+    y0, y1 = cfg["centres"]["ncep"]["years"]
+    region = resolve_region(cfg, cfg["cpt"]["region"])
+    return verify_predictand(path, "precipitation", range(y0, y1 + 1), start_month,
+                             cfg["cpt"]["season_leads"], region)
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["--report"]:
         print(build_report())
+    elif sys.argv[1:2] == ["--predictando"]:
+        month = int(sys.argv[2]) if len(sys.argv) > 2 else load_config()["month"]
+        sys.exit(0 if _verify_configured_predictand(month) else 1)
     else:
         sys.exit(0 if verify(Path(sys.argv[1])) else 1)

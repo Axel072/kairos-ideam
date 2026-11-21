@@ -68,12 +68,40 @@ def download(cfg: dict, centre: str, variable: str = "precipitation",
     return target
 
 
+def forecast_unavailable(exc: BaseException) -> bool:
+    """¿El CDS rechazó la fecha porque ese pronóstico aún no está publicado?
+
+    Comprobado contra el CDS el 2026-11-21: pedir un pronóstico no publicado da HTTPError 400
+    con el error de MARS "AccessError: Restricted access to current C3S seasonal forecast
+    non-ECMWF contribution. Please check that your date selection is valid". Credenciales (401),
+    licencia (403), cuota, errores del servidor (5xx) o de red NO cuentan: esos se propagan.
+    """
+    from requests import HTTPError
+
+    if not isinstance(exc, HTTPError):
+        return False
+    status = getattr(exc.response, "status_code", None)
+    return status == 400 and "mars" in str(exc).lower()
+
+
+def _mars_reason(exc: BaseException) -> str:
+    """Primera línea 'XxxError: ...' del log de MARS (p. ej. AccessError: Restricted access...)."""
+    for line in str(exc).splitlines():
+        msg = line.split(" - ")[-1].strip()
+        if line.lower().startswith("mars") and "Error:" in msg:
+            return msg[:160]
+    return str(exc).splitlines()[0][:160]
+
+
 def latest_forecast(cfg: dict, centres, variable: str = "precipitation",
                     region: Region | None = None, force: bool = False,
                     today: dt.date | None = None,
                     months_back: int = 3) -> tuple[int, int, dict[str, Path]]:
-    from requests import HTTPError
+    """Pronóstico más reciente disponible para TODOS los centros, desde el mes de `today`.
 
+    Solo retrocede un mes si el CDS indica que el pronóstico aún no está publicado
+    (`forecast_unavailable`); cualquier otro error se propaga con su mensaje original.
+    """
     today = today or dt.date.today()
     y, m = today.year, today.month
     for _ in range(months_back):
@@ -82,10 +110,13 @@ def latest_forecast(cfg: dict, centres, variable: str = "precipitation",
                                  month=m, forecast_year=y)
                      for c in centres}
             return y, m, paths
-        except HTTPError:
-            print(f"[--] sin pronóstico {y}-{m:02d} para todos los centros; se prueba el mes anterior")
+        except Exception as exc:
+            if not forecast_unavailable(exc):
+                raise
+            print(f"[--] pronóstico {y}-{m:02d} aún no publicado para todos los centros "
+                  f"({_mars_reason(exc)}); se prueba el mes anterior")
         y, m = (y - 1, 12) if m == 1 else (y, m - 1)
-    raise RuntimeError(f"ningún pronóstico en los últimos {months_back} meses")
+    raise RuntimeError(f"ningún pronóstico publicado en los últimos {months_back} meses")
 
 
 def download_chirps_year(cfg: dict, year: int, out_dir: Path = Path("data") / "raw",

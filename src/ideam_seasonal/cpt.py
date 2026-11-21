@@ -12,10 +12,11 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from ideam_seasonal.common import CENTRES, Region, load_config, open_grib, resolve_region
+from ideam_seasonal.common import (CENTRES, Region, load_config, open_grib, predictand_path,
+                                   resolve_region)
 from ideam_seasonal.homogenize import monthly_mean, reduce_lagged
 from ideam_seasonal.ingest import download, latest_forecast
-from ideam_seasonal.verify import verify
+from ideam_seasonal.verify import verify, verify_predictand
 
 CPT_HEADER = "xmlns:cpt=http://iri.columbia.edu/CPT/v10/"
 MISSING = -999.0
@@ -72,9 +73,11 @@ def ensemble(fields: dict[str, xr.DataArray]) -> xr.DataArray:
 
 def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads: list[int],
               region: Region, centres: list[str], members: dict, files: dict,
-              grid: xr.DataArray) -> Path:
+              grid: xr.DataArray, predictand: Path | None = None) -> Path:
     y0, y1 = (int(v) for v in grid["year"].values[[0, -1]])
     corrida = "A" if len(centres) == 1 else "A y B"
+    y_text = (f"{predictand.name} (verificado)" if predictand
+              else "sin definir para esta variable: solo se escriben X y Z")
     lines = [f"# Registro de corrida: {variable}, inicio {year}-{month:02d}", "",
              "| Campo | Valor |", "|---|---|",
              f"| Fecha | {dt.datetime.now():%Y-%m-%d %H:%M} |",
@@ -85,6 +88,7 @@ def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads
              f"| Región | {region.name}: {region.bounds()} |",
              f"| Rejilla | {grid.sizes['lat']} × {grid.sizes['lon']} celdas |",
              f"| Años del hindcast | {y0}–{y1} |",
+             f"| Predictando (Y) | {y_text} |",
              "",
              "| Modelo | Sistema | Miembros X | Miembros Z | Archivo X | Archivo Z |",
              "|---|---|---|---|---|---|"]
@@ -126,6 +130,12 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
     if len(centres) > 1:
         x[ENSEMBLE], z[ENSEMBLE] = ensemble(x), ensemble(z)
 
+    y_path = predictand_path(cfg, variable)
+    if y_path is None:
+        print(f"[--] sin predictando (Y) configurado para {variable}: se escriben solo X y Z")
+    elif not verify_predictand(y_path, variable, x[centres[0]]["year"].values, month, leads, reg):
+        raise ValueError(f"{y_path.name} no pasó la verificación; no se escriben archivos CPT")
+
     tag = f"{variable}_i{year}{month:02d}_{reg.name}"
     files = {}
     for name in x:
@@ -133,7 +143,7 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
                                        f"{variable}_{name}", month, leads)
                        for kind, data in (("X", x), ("Z", z))}
     log = write_log(out_dir / f"registro_{tag}.md", cfg, variable, year, month, leads, reg,
-                    centres, members, files, x[centres[0]])
+                    centres, members, files, x[centres[0]], predictand=y_path)
     return [p for f in files.values() for p in f.values()] + [log]
 
 

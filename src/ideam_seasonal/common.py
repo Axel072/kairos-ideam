@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 import yaml
@@ -199,3 +200,67 @@ def open_chirps(path: Path) -> xr.Dataset:
     ds = xr.open_dataset(path, mask_and_scale=False, decode_times=False)
     ds["time"] = pd.to_datetime(ds["time"].values, unit="D", origin="1980-01-01")
     return ds
+
+
+def predictand_path(cfg: dict, variable: str) -> Path | None:
+    """Ruta del Y configurado para la variable (relativa a la raíz del repo), o None."""
+    rel = (cfg.get("predictand") or {}).get(variable)
+    return ROOT / rel if rel else None
+
+
+def _cpt_tags(line: str) -> dict[str, str]:
+    tags = {}
+    for item in line.strip().split(","):
+        item = item.strip()
+        if item.startswith("cpt:") and "=" in item:
+            k, v = item[4:].split("=", 1)
+            tags[k.strip()] = v.strip()
+    return tags
+
+
+def open_cpt_stations(path: Path) -> xr.DataArray:
+    """Lee un archivo CPT de estaciones (un campo, serie mensual) -> DataArray (time, station).
+
+    Faltantes (`cpt:missing`) -> NaN. Falla con ValueError si el formato no es el esperado:
+    no es de estaciones, tiene más de un campo, fechas no mensuales o filas/columnas que no
+    coinciden con `cpt:nrow`/`cpt:ncol`.
+    """
+    lines = [ln.rstrip("\r\n") for ln in Path(path).read_text(encoding="utf-8").splitlines()]
+    starts = [i for i, ln in enumerate(lines) if ln.lstrip().startswith("cpt:field")]
+    if len(starts) != 1:
+        raise ValueError(f"{Path(path).name}: se espera un solo bloque cpt:field (hay {len(starts)})")
+    i = starts[0]
+    tags = _cpt_tags(lines[i])
+    if tags.get("col") != "station" or tags.get("row") != "T":
+        raise ValueError(f"{Path(path).name}: no es un archivo de estaciones "
+                         f"(cpt:col={tags.get('col')}, cpt:row={tags.get('row')})")
+    nrow, ncol = int(tags["nrow"]), int(tags["ncol"])
+
+    def cells(line: str) -> list[str]:
+        return [c.strip() for c in line.split("\t")][1:][:ncol]
+
+    ids = cells(lines[i + 1])
+    rows = {ln.split("\t", 1)[0].strip(): ln for ln in lines[i + 2:i + 4]}
+    if set(rows) != {"cpt:X", "cpt:Y"}:
+        raise ValueError(f"{Path(path).name}: faltan las filas cpt:X / cpt:Y de coordenadas")
+    lon = np.array(cells(rows["cpt:X"]), dtype=float)
+    lat = np.array(cells(rows["cpt:Y"]), dtype=float)
+    data = [ln for ln in lines[i + 4:] if ln.strip()]
+    if len(data) != nrow or len(ids) != ncol or lon.size != ncol or lat.size != ncol:
+        raise ValueError(f"{Path(path).name}: tamaño distinto al declarado (filas {len(data)} vs "
+                         f"cpt:nrow={nrow}; columnas {len(ids)} vs cpt:ncol={ncol})")
+    dates = [ln.split("\t", 1)[0].strip() for ln in data]
+    try:
+        time = pd.to_datetime(dates, format="%Y-%m")
+    except ValueError:
+        raise ValueError(f"{Path(path).name}: fechas no mensuales (YYYY-MM), p. ej. "
+                         f"'{dates[0]}'; solo se admiten series mensuales") from None
+    values = np.array([cells(ln) for ln in data], dtype=float)
+    missing = float(tags["missing"]) if "missing" in tags else None
+    if missing is not None:
+        values[values == missing] = np.nan
+    return xr.DataArray(
+        values, dims=("time", "station"),
+        coords={"time": time, "station": ids, "lon": ("station", lon), "lat": ("station", lat)},
+        attrs={"units": tags.get("units"), "field": tags.get("field"), "missing": missing,
+               "source": Path(path).name})

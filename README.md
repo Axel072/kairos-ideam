@@ -65,6 +65,22 @@ bash cpt.sh --region 5,-75,-2,-70   # cuadro propio N,W,S,E (longitudes con sign
 Escribe en `data/cpt/` los archivos y un `registro_*.md` por variable. Temporada y región
 están en `config/params.yaml` (`cpt`).
 
+El pronóstico más reciente se busca desde el mes actual; solo se retrocede un mes si el CDS
+responde que ese pronóstico aún no está publicado. Cualquier otro error (credenciales,
+licencia, servidor, red) detiene la corrida con su mensaje original.
+
+El predictando (Y) lo entrega el IDEAM ya en formato CPT de estaciones; su ruta está en
+`config/params.yaml` (`predictand`). Antes de escribir X y Z se verifica: formato, longitudes,
+que haya estaciones dentro de la región, que cubra todos los meses de la temporada del
+hindcast, unidades, que no venga acumulado y que no supere el 10 % de faltantes. Para
+verificarlo solo:
+
+```
+python -m ideam_seasonal.verify --predictando 11   # 11 = mes de inicio del pronóstico
+```
+
+Temperatura todavía no tiene Y: se escriben solo X y Z y el registro lo indica.
+
 Tests:
 
 ```
