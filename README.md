@@ -22,58 +22,73 @@ pip install -e .
 ```
 
 En Linux/macOS, `source venv/bin/activate`. La activación solo hace falta para correr los
-módulos a mano o los tests; `run.sh` no la necesita.
+módulos a mano o los tests; `kairos.sh` no la necesita.
 
 ## Uso
 
-Todo el flujo se corre con un solo script, `run.sh`, desde Git Bash (en cualquier carpeta;
-usa el `venv` del repositorio sin necesidad de activarlo). Región, años, mes, variable y
-centros están en `config/params.yaml`.
+Todo se corre con un solo comando, `kairos.sh`, desde Git Bash o bash de Linux (en cualquier
+carpeta; usa el `venv` del repositorio sin necesidad de activarlo):
 
 ```
-bash run.sh            # usa la caché de data/raw/
-bash run.sh --force    # vuelve a descargar todo
+bash kairos.sh
 ```
 
-El script se detiene en el primer paso que falle (`set -e`) y ejecuta, en orden:
+Sin opciones baja del CDS el pronóstico más reciente publicado y el hindcast del mismo mes de
+inicio, verifica cada archivo, verifica el predictando (Y) y escribe en `data/cpt/` los
+archivos de entrada de CPT: X (hindcast) y Z (pronóstico) de NCEP, DWD, BOM y su promedio,
+para lluvia y temperatura, más un `registro_*.md` por variable. Todo lo que no se indique
+sale de `config/params.yaml`.
 
-1. **Descarga** de NCEP, DWD, BOM y CHIRPS a `data/raw/` (`ingest`). Si ya existe un archivo
-   con el mismo request se reusa.
-2. **Verificación** de cada GRIB (`verify <archivo>`): longitudes, unidades y acumulación.
-   Si una fuente falla, el flujo se detiene antes de homogeneizar.
-3. **Homogeneización** (`homogenize`): reduce NCEP, DWD y BOM a (año, miembro, anticipación),
-   pasa todo a mm/día y promedia CHIRPS a la celda de 1° de los modelos. Escribe
-   `data/processed/homogeneizado_precipitation_m05_box.nc`, con un grupo por fuente (`ncep`,
-   `dwd`, `bom`, `chirps`, `chirps_1deg`). En cada modelo, `pr` guarda todos los miembros y
-   `pr_mensual` el valor mensual: promedio simple de todos los miembros e inicializaciones
-   (decisión del cliente; es el mismo promedio que usan los archivos de CPT).
-4. **Informe de control de calidad** (`verify --report`): escribe
-   `docs/informe_control_calidad.md`.
+### Opciones
 
-El archivo homogeneizado se lee con `xr.open_dataset(ruta, group="ncep")`. `lead` 1 es el
-mes de inicialización (mayo).
+Se pueden combinar; cada una reemplaza el valor de `params.yaml` solo en esa corrida.
+`bash kairos.sh --help` las lista todas.
 
-Archivos de entrada de CPT (X y Z de NCEP, DWD, BOM y su promedio, para lluvia y
-temperatura), con el pronóstico más reciente del CDS y el hindcast del mismo mes de inicio:
+| Opción | Ejemplo | Por defecto |
+|---|---|---|
+| `-r`, `--region` | `colombia`, `prueba`, `global` o un cuadro `5,-75,-2,-70` (N,W,S,E, longitudes con signo) | `cpt.region` (colombia) |
+| `-m`, `--modelo` | `ncep`, `-m ncep -m dwd` o `ncep,dwd` | los tres y su promedio |
+| `-v`, `--variable` | `precipitation`, `temperature` | ambas |
+| `-i`, `--inicio` | `2026-10` | el más reciente publicado |
+| `-t`, `--temporada` | `2-4` (leads; 1 = mes de inicio) | `cpt.season_leads` (2-4) |
+| `-a`, `--anios` | `1995-2015` (periodo del hindcast) | el de los centros (1993-2016) |
+| `-o`, `--salida` | `otra/carpeta` | `data/cpt` |
+| `-f`, `--force` | | usa la caché de `data/raw/` |
+
+Ejemplos:
 
 ```
-bash cpt.sh                  # los tres modelos y el promedio
-bash cpt.sh --modelo ncep    # solo NCEP
-bash cpt.sh --region 5,-75,-2,-70   # cuadro propio N,W,S,E (longitudes con signo)
+bash kairos.sh -m ncep -v precipitation          # un modelo, una variable
+bash kairos.sh --region 5,-75,-2,-70             # cuadro propio
+bash kairos.sh --inicio 2026-10 --temporada 2-4  # inicio y temporada concretos
 ```
 
-Escribe en `data/cpt/` los archivos y un `registro_*.md` por variable. Temporada y región
-están en `config/params.yaml` (`cpt`).
+Con más de un modelo se escribe también el promedio (peso igual por modelo). Con un cuadro
+propio, las descargas se guardan aparte en `data/raw/` (no se mezclan con las de otra región).
+Una opción inválida se rechaza antes de descargar nada; si algo falla durante la corrida, el
+comando termina con `ERROR: <motivo>` y código de salida 1 sin escribir archivos CPT a medias.
 
-El pronóstico más reciente se busca desde el mes actual; solo se retrocede un mes si el CDS
-responde que ese pronóstico aún no está publicado. Cualquier otro error (credenciales,
-licencia, servidor, red) detiene la corrida con su mensaje original.
+El registro de cada corrida guarda el comando exacto, la elección del inicio, la temporada, la
+región, los años del hindcast, el Y usado y los miembros de cada modelo.
 
-El predictando (Y) lo entrega el IDEAM ya en formato CPT de estaciones; su ruta está en
-`config/params.yaml` (`predictand`). Antes de escribir X y Z se verifica: formato, longitudes,
-que haya estaciones dentro de la región, que cubra todos los meses de la temporada del
-hindcast, unidades, que no venga acumulado y que no supere el 10 % de faltantes. Para
-verificarlo solo:
+### Pronóstico más reciente
+
+Se busca desde el mes actual; solo se retrocede un mes si el CDS responde que ese pronóstico
+aún no está publicado. Cualquier otro error (credenciales, licencia, servidor, red) detiene la
+corrida con su mensaje original. Con `--inicio` se pide un mes concreto y no se retrocede.
+
+### Valor mensual
+
+Cuando un modelo tiene varios valores para un mes (varios días e inicializaciones de un
+ensamble *lagged*, o varios miembros), el valor mensual es su promedio simple (decisión del
+cliente). La temporada es el promedio de los valores mensuales de sus leads.
+
+### Predictando (Y)
+
+Lo entrega el IDEAM ya en formato CPT de estaciones; su ruta está en `config/params.yaml`
+(`predictand`). Antes de escribir X y Z se verifica: formato, longitudes, que haya estaciones
+dentro de la región, que cubra todos los meses de la temporada del hindcast, unidades, que no
+venga acumulado y que no supere el 10 % de faltantes. Para verificarlo solo:
 
 ```
 python -m ideam_seasonal.verify --predictando 11   # 11 = mes de inicio del pronóstico
@@ -81,7 +96,24 @@ python -m ideam_seasonal.verify --predictando 11   # 11 = mes de inicio del pron
 
 Temperatura todavía no tiene Y: se escriben solo X y Z y el registro lo indica.
 
-Tests:
+### Control de calidad de la Fase 2
+
+```
+bash kairos.sh qc            # usa la caché de data/raw/
+bash kairos.sh qc --force    # vuelve a descargar todo
+```
+
+Sobre la caja de prueba y el mes de `params.yaml`: descarga NCEP, DWD, BOM y CHIRPS,
+verifica longitudes, unidades y acumulación de cada GRIB, homogeneiza
+(`data/processed/homogeneizado_precipitation_m05_box.nc`, un grupo por fuente; en cada modelo
+`pr` guarda todos los miembros y `pr_mensual` el valor mensual) y escribe
+`docs/informe_control_calidad.md`. El archivo homogeneizado se lee con
+`xr.open_dataset(ruta, group="ncep")`; `lead` 1 es el mes de inicialización.
+
+`run.sh` y `cpt.sh` siguen funcionando por compatibilidad: equivalen a `kairos.sh qc` y
+`kairos.sh`.
+
+### Tests
 
 ```
 python -m pytest
@@ -90,20 +122,17 @@ python -m pytest
 ## Estructura
 
 ```
-run.sh                    corre el flujo completo (descarga, verificación, homogeneización, informe)
-cpt.sh                    archivos de entrada de CPT
-config/params.yaml        región, variables, años, centros
+kairos.sh                 comando único (archivos CPT; `qc` para el control de calidad)
+run.sh, cpt.sh            compatibilidad: llaman a kairos.sh
+config/params.yaml        región, variables, años, centros, temporada, predictando
 src/ideam_seasonal/
-  ingest.py               descarga (cdsapi y CHIRPS)
-  common.py               constantes y helpers compartidos (unidades, lectura de GRIB/CHIRPS)
-  verify.py               chequeos e informe
-  homogenize.py           reducción de ensambles y dataset homogeneizado
-  cpt.py                  escritura en formato CPT
+  kairos.py               opciones del comando único
+  ingest.py               descarga (cdsapi y CHIRPS) y pronóstico más reciente
+  common.py               configuración, variables, regiones, nombres de archivo, lectura
+  verify.py               chequeos de GRIB y del Y, informe
+  homogenize.py           reducción de ensambles, valor mensual y dataset homogeneizado
+  cpt.py                  escritura en formato CPT y registro de corrida
 tests/
-docs/                     hallazgos.md, informe_control_calidad.md
-data/                     no se versiona (raw/ descargas, processed/ homogeneizado)
+docs/                     predictando (Y) del IDEAM
+data/                     no se versiona (raw/ descargas, processed/, cpt/)
 ```
-
-## Notas
-
-- La región de `params.yaml` es una caja de prueba, no Colombia completo.

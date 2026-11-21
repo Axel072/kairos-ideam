@@ -1,10 +1,10 @@
-"""
-Uso:  python -m ideam_seasonal.cpt [--modelo ncep|dwd|bom] [--variable precipitation|temperature]
-                                   [--region colombia|prueba|global|N,W,S,E]
+"""Escritura de los archivos de entrada de CPT (X, Z) y verificación del Y.
+
+Se usa desde `bash kairos.sh` (ver `ideam_seasonal.kairos`); `python -m ideam_seasonal.cpt`
+acepta las mismas opciones.
 """
 from __future__ import annotations
 
-import argparse
 import datetime as dt
 import io
 from pathlib import Path
@@ -12,10 +12,10 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from ideam_seasonal.common import (CENTRES, Region, load_config, open_grib, predictand_path,
+from ideam_seasonal.common import (Region, load_config, open_grib, predictand_path,
                                    resolve_region)
 from ideam_seasonal.homogenize import monthly_mean, reduce_lagged
-from ideam_seasonal.ingest import download, latest_forecast
+from ideam_seasonal.ingest import download, forecast_unavailable, latest_forecast
 from ideam_seasonal.verify import verify, verify_predictand
 
 CPT_HEADER = "xmlns:cpt=http://iri.columbia.edu/CPT/v10/"
@@ -73,7 +73,8 @@ def ensemble(fields: dict[str, xr.DataArray]) -> xr.DataArray:
 
 def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads: list[int],
               region: Region, centres: list[str], members: dict, files: dict,
-              grid: xr.DataArray, predictand: Path | None = None) -> Path:
+              grid: xr.DataArray, predictand: Path | None = None,
+              command: str | None = None, start_mode: str = "más reciente") -> Path:
     y0, y1 = (int(v) for v in grid["year"].values[[0, -1]])
     corrida = "A" if len(centres) == 1 else "A y B"
     y_text = (f"{predictand.name} (verificado)" if predictand
@@ -81,7 +82,10 @@ def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads
     lines = [f"# Registro de corrida: {variable}, inicio {year}-{month:02d}", "",
              "| Campo | Valor |", "|---|---|",
              f"| Fecha | {dt.datetime.now():%Y-%m-%d %H:%M} |",
+             *([f"| Comando | `{command}` |"] if command else []),
              f"| Corrida | {corrida} |",
+             f"| Modelos | {', '.join(centres)} |",
+             f"| Elección del inicio | {start_mode} |",
              f"| Variable | {variable} ({grid.attrs.get('units', '')}) |",
              f"| Inicio del pronóstico | {year}-{month:02d} |",
              f"| Temporada | {season_label(year, month, leads)} (leads {', '.join(map(str, leads))}) |",
@@ -105,15 +109,54 @@ def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads
     return path
 
 
-def build(centres: list[str], variable: str = "precipitation", force: bool = False,
-          out_dir: Path = Path("data") / "cpt", region: str | None = None) -> list[Path]:
-    cfg = load_config()
-    leads = cfg["cpt"]["season_leads"]
-    n_leads = len(cfg["leadtime_months"])
-    reg = resolve_region(cfg, region, default=cfg["cpt"]["region"])
+def forecast_files(cfg: dict, centres: list[str], variable: str, region: Region, force: bool,
+                   start: tuple[int, int] | None) -> tuple[int, int, dict[str, Path], str]:
+    """Pronóstico (Z): el más reciente publicado o el del inicio pedido (año, mes)."""
+    if start is None:
+        year, month, paths = latest_forecast(cfg, centres, variable, region=region, force=force)
+        print(f"Pronóstico más reciente: inicio {year}-{month:02d}")
+        return year, month, paths, "más reciente publicado"
+    year, month = start
+    try:
+        paths = {c: download(cfg, c, variable, region=region, force=force, month=month,
+                             forecast_year=year) for c in centres}
+    except Exception as exc:
+        if forecast_unavailable(exc):
+            raise RuntimeError(f"el pronóstico con inicio {year}-{month:02d} no está publicado "
+                               "en el CDS (todavía o para algún centro)") from exc
+        raise
+    print(f"Pronóstico pedido: inicio {year}-{month:02d}")
+    return year, month, paths, "pedido con --inicio"
 
-    year, month, z_raw = latest_forecast(cfg, centres, variable, region=reg, force=force)
-    print(f"Pronóstico más reciente: inicio {year}-{month:02d}")
+
+def hindcast_years(cfg: dict, centres: list[str], years: tuple[int, int] | None) -> tuple[int, int]:
+    """Periodo del hindcast: el pedido, que debe caber en el de todos los centros elegidos."""
+    lo = max(cfg["centres"][c]["years"][0] for c in centres)
+    hi = min(cfg["centres"][c]["years"][1] for c in centres)
+    if years is None:
+        return lo, hi
+    y0, y1 = years
+    if not (lo <= y0 <= y1 <= hi):
+        raise ValueError(f"años del hindcast {y0}–{y1} fuera del periodo disponible {lo}–{hi} "
+                         f"para {', '.join(centres)}")
+    return y0, y1
+
+
+def build(centres: list[str], variable: str = "precipitation", force: bool = False,
+          out_dir: Path = Path("data") / "cpt", region: str | None = None,
+          start: tuple[int, int] | None = None, leads: list[int] | None = None,
+          years: tuple[int, int] | None = None, command: str | None = None) -> list[Path]:
+    """X, Z (y verificación del Y) en formato CPT. Lo que no se pase sale de params.yaml."""
+    cfg = load_config()
+    leads = leads or cfg["cpt"]["season_leads"]
+    n_leads = len(cfg["leadtime_months"])
+    if not set(leads) <= set(cfg["leadtime_months"]):
+        raise ValueError(f"temporada (leads {leads}) fuera de los leads descargados "
+                         f"{cfg['leadtime_months']}")
+    reg = resolve_region(cfg, region, default=cfg["cpt"]["region"])
+    y0, y1 = hindcast_years(cfg, centres, years)
+
+    year, month, z_raw, start_mode = forecast_files(cfg, centres, variable, reg, force, start)
     x_raw = {c: download(cfg, c, variable, region=reg, force=force, month=month)
              for c in centres}
 
@@ -123,7 +166,9 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
 
     x, z, members = {}, {}, {}
     for c in centres:
-        hx = reduce_lagged(open_grib(x_raw[c]), month, n_leads)
+        hx = reduce_lagged(open_grib(x_raw[c]), month, n_leads).sel(year=slice(y0, y1))
+        if [int(hx["year"][0]), int(hx["year"][-1])] != [y0, y1]:
+            raise ValueError(f"{c}: el hindcast descargado no cubre {y0}–{y1}")
         hz = reduce_lagged(open_grib(z_raw[c]), month, n_leads)
         members[c] = (hx.sizes["member"], hz.sizes["member"])
         x[c], z[c] = season_mean(hx, leads), season_mean(hz, leads)
@@ -143,32 +188,15 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
                                        f"{variable}_{name}", month, leads)
                        for kind, data in (("X", x), ("Z", z))}
     log = write_log(out_dir / f"registro_{tag}.md", cfg, variable, year, month, leads, reg,
-                    centres, members, files, x[centres[0]], predictand=y_path)
+                    centres, members, files, x[centres[0]], predictand=y_path,
+                    command=command, start_mode=start_mode)
     return [p for f in files.values() for p in f.values()] + [log]
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--modelo", choices=CENTRES,
-                   help="solo ese modelo (X y Z); sin esta opción, los tres y el promedio")
-    p.add_argument("--force", action="store_true", help="ignora la caché de data/raw/")
-    p.add_argument("--variable", choices=["precipitation", "temperature", "ambas"], default="ambas")
-    p.add_argument("--region",
-                   help="colombia, prueba, global o un cuadro N,W,S,E (p. ej. 5,-75,-2,-70); "
-                        "por defecto la de config/params.yaml (cpt.region)")
-    a = p.parse_args()
-    cfg = load_config()
-    try:
-        resolve_region(cfg, a.region, default=cfg["cpt"]["region"])
-    except ValueError as e:
-        p.error(str(e))
-    variables = ["precipitation", "temperature"] if a.variable == "ambas" else [a.variable]
-    for v in variables:
-        for path in build([a.modelo] if a.modelo else list(CENTRES), v, force=a.force,
-                          region=a.region):
-            print(f"[ok] {path}")
-
-
 if __name__ == "__main__":
-    main()
+    # Compatibilidad: `python -m ideam_seasonal.cpt ...` = `bash kairos.sh ...`
+    import sys
+
+    from ideam_seasonal.kairos import main
+
+    sys.exit(main())
