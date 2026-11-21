@@ -6,7 +6,7 @@ import requests
 
 from ideam_seasonal import ingest
 
-# Mensaje real del CDS (2026-11-21) al pedir un pronóstico aún no publicado, abreviado.
+# respuesta real del CDS (2026-11-21), abreviada
 MARS_NOT_PUBLISHED = (
     "400 Client Error: Bad Request for url: https://cds.climate.copernicus.eu/api/retrieve/v1/"
     "jobs/x/results\nThe job has failed\nMARS has returned an error, please check your selection.\n"
@@ -22,7 +22,6 @@ def _http_error(status: int, text: str) -> requests.HTTPError:
 
 
 def _fake_download(available: set[tuple[int, int]], error: Exception | None = None):
-    """download() falso: éxito si (año, mes) está publicado; si no, el error indicado."""
     calls = []
 
     def fake(cfg, centre, variable, region=None, force=False, month=None, forecast_year=None):
@@ -34,7 +33,7 @@ def _fake_download(available: set[tuple[int, int]], error: Exception | None = No
     return fake, calls
 
 
-CFG = {}  # latest_forecast solo pasa cfg a download
+CFG = {}
 
 
 def test_unavailable_detection():
@@ -69,7 +68,7 @@ def test_falls_back_across_year(monkeypatch):
 
 
 def test_all_centres_must_share_the_month(monkeypatch):
-    """Si un centro no tiene el mes, se retrocede para todos (X y Z alineados)."""
+    """Si un centro no tiene el mes, se retrocede para todos."""
     calls = []
 
     def fake(cfg, centre, variable, region=None, force=False, month=None, forecast_year=None):
@@ -90,7 +89,6 @@ def test_all_centres_must_share_the_month(monkeypatch):
     requests.ConnectionError("no network"),
 ])
 def test_other_errors_are_not_hidden(monkeypatch, error):
-    """Credenciales, licencia, servidor o red: se propaga el error, no se usa un mes viejo."""
     fake, calls = _fake_download({(2026, 10)}, error=error)
     monkeypatch.setattr(ingest, "download", fake)
     with pytest.raises(type(error)):

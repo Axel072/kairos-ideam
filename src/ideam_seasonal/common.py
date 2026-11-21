@@ -11,8 +11,7 @@ import yaml
 
 CENTRES = ("ncep", "dwd", "bom")
 
-# Raíz del repositorio (src/ideam_seasonal/common.py -> ../../); no depende del directorio
-# desde el que se ejecute.
+# raíz del repo: no depende del directorio de trabajo
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "config" / "params.yaml"
 
@@ -22,22 +21,14 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
         return yaml.safe_load(f)
 
 
-# ---------------------------------------------------------------------------------------------
-# Variables
-# ---------------------------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class Variable:
-    """Una variable y cómo pasar cada unidad declarada a la unidad estándar.
-
-    `conversions[unidad] = (escala, desplazamiento)`: estándar = valor * escala + desplazamiento.
-    `None` marca una unidad reconocida pero acumulada (hay que desacumular antes).
-    """
+    """conversions[unidad] = (escala, desplazamiento); None = unidad acumulada."""
     key: str
     short: str
     units: str
     long_name: str
-    plausible: tuple[float, float]  # rango plausible de la MEDIA, en unidades estándar
+    plausible: tuple[float, float]  # rango plausible de la media
     conversions: dict[str, tuple[float, float] | None] = field(default_factory=dict)
     accumulable: bool = False
 
@@ -61,7 +52,7 @@ VARIABLES = {
         conversions={"K": (1.0, -273.15), "C": (1.0, 0.0), "degC": (1.0, 0.0)}),
 }
 
-# Vistas por variable que usa verify.py (derivadas del registro, no se editan aparte).
+# derivadas del registro (las usa verify.py)
 PRECIP_UNIT_TO_MM_DAY = {u: (c[0] if c else None)
                          for u, c in VARIABLES["precipitation"].conversions.items()}
 TEMP_UNIT_TO_C = {u: c[1] for u, c in VARIABLES["temperature"].conversions.items()}
@@ -72,7 +63,6 @@ def get_units(da: xr.DataArray) -> str | None:
 
 
 def variable_of(da: xr.DataArray) -> Variable:
-    """Variable según la unidad declarada; ValueError si falta o no está en el registro."""
     unit = get_units(da)
     if unit is None:
         raise ValueError("sin atributo units")
@@ -83,7 +73,6 @@ def variable_of(da: xr.DataArray) -> Variable:
 
 
 def conversion(da: xr.DataArray) -> tuple[float, float]:
-    """(escala, desplazamiento) a la unidad estándar; ValueError si es desconocida o acumulada."""
     v = variable_of(da)
     unit = get_units(da)
     conv = v.conversions[unit]
@@ -106,7 +95,7 @@ def to_standard(da: xr.DataArray, values):
 
 
 def unit_factor(da: xr.DataArray) -> float:
-    """Factor a mm/día de una unidad de precipitación; ValueError si falta, no se reconoce o es acumulada."""
+    """Factor a mm/día (solo precipitación)."""
     if variable_of(da).key != "precipitation":
         raise ValueError(f"unidad '{get_units(da)}' no es de precipitación")
     return conversion(da)[0]
@@ -116,13 +105,9 @@ def is_temperature(da: xr.DataArray) -> bool:
     return get_units(da) in VARIABLES["temperature"].conversions
 
 
-# ---------------------------------------------------------------------------------------------
-# Regiones y nombres de archivo
-# ---------------------------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class Region:
-    """`name` va en los nombres de archivo; `area` es None para global."""
+    """`area` None = global."""
     name: str
     area: dict | None
 
@@ -138,7 +123,6 @@ def _num(x: float) -> str:
 
 
 def parse_box(text: str) -> dict:
-    """'N,W,S,E' (grados, longitudes con signo) -> dict; ValueError si no es un cuadro válido."""
     parts = [p.strip() for p in text.split(",")]
     if len(parts) != 4:
         raise ValueError(f"cuadro '{text}': se esperan 4 valores N,W,S,E")
@@ -155,7 +139,7 @@ def parse_box(text: str) -> dict:
 
 
 def resolve_region(cfg: dict, spec: str | None = None, default: str = "prueba") -> Region:
-    """Región por nombre ('prueba', 'global' o una de `cpt.regions`) o por cuadro 'N,W,S,E'."""
+    """Por nombre (prueba, global, cpt.regions) o cuadro 'N,W,S,E'."""
     spec = spec or default
     if spec == "global":
         return Region("global", None)
@@ -174,23 +158,19 @@ def resolve_region(cfg: dict, spec: str | None = None, default: str = "prueba") 
 
 def raw_path(out_dir: Path, centre: str, variable: str, month: int, region: Region,
              forecast_year: int | None = None) -> Path:
-    """GRIB crudo del CDS. `forecast_year` -> pronóstico de ese año; si no, hindcast."""
+    """Con `forecast_year`, pronóstico; sin él, hindcast."""
     tag = f"f{forecast_year}{month:02d}" if forecast_year else f"m{month:02d}"
     return out_dir / f"{centre}_{variable}_{tag}_{region.name}.grib"
 
 
 def chirps_path(out_dir: Path, year: int | str, region: Region) -> Path:
-    """CHIRPS recortado de un año; `year="*"` da el patrón para buscar todos los años."""
+    """`year="*"` da el patrón de búsqueda."""
     return out_dir / f"chirps_v3_{year}_{region.name}.nc"
 
 
 def processed_path(out_dir: Path, variable: str, month: int, region: Region) -> Path:
     return out_dir / f"homogeneizado_{variable}_m{month:02d}_{region.name}.nc"
 
-
-# ---------------------------------------------------------------------------------------------
-# Lectura
-# ---------------------------------------------------------------------------------------------
 
 def open_grib(path: Path) -> xr.Dataset:
     return xr.open_dataset(path, engine="cfgrib", backend_kwargs={"indexpath": ""})
@@ -203,7 +183,6 @@ def open_chirps(path: Path) -> xr.Dataset:
 
 
 def predictand_path(cfg: dict, variable: str) -> Path | None:
-    """Ruta del Y configurado para la variable (relativa a la raíz del repo), o None."""
     rel = (cfg.get("predictand") or {}).get(variable)
     return ROOT / rel if rel else None
 
@@ -219,11 +198,7 @@ def _cpt_tags(line: str) -> dict[str, str]:
 
 
 def read_cpt_grid(path: Path) -> dict[str, xr.DataArray]:
-    """Archivo CPT de rejilla -> {cpt:T: DataArray (lat, lon)}, latitudes de norte a sur.
-
-    Lee tanto los archivos que escribe `cpt.write_cpt` como los que escribe CPT (donde las
-    etiquetas de un bloque se heredan del anterior si no se repiten).
-    """
+    """{cpt:T: (lat, lon)}, norte a sur. Las etiquetas se heredan entre bloques (salidas de CPT)."""
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     out, tags, i = {}, {}, 0
     while i < len(lines):
@@ -247,12 +222,7 @@ def read_cpt_grid(path: Path) -> dict[str, xr.DataArray]:
 
 
 def open_cpt_stations(path: Path) -> xr.DataArray:
-    """Lee un archivo CPT de estaciones (un campo, serie mensual) -> DataArray (time, station).
-
-    Faltantes (`cpt:missing`) -> NaN. Falla con ValueError si el formato no es el esperado:
-    no es de estaciones, tiene más de un campo, fechas no mensuales o filas/columnas que no
-    coinciden con `cpt:nrow`/`cpt:ncol`.
-    """
+    """Archivo CPT de estaciones mensual de un campo -> (time, station); faltantes -> NaN."""
     lines = [ln.rstrip("\r\n") for ln in Path(path).read_text(encoding="utf-8").splitlines()]
     starts = [i for i, ln in enumerate(lines) if ln.lstrip().startswith("cpt:field")]
     if len(starts) != 1:

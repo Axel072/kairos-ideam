@@ -16,16 +16,12 @@ def _da(units):
     return xr.DataArray(np.array([1.0, 2.0]), dims="x", attrs={"units": units})
 
 
-# --- configuración ---------------------------------------------------------------------------
-
 def test_load_config_independent_of_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cfg = common.load_config()
     assert "centres" in cfg and common.CONFIG_PATH.is_absolute()
     assert ingest.load_config is common.load_config
 
-
-# --- variables -------------------------------------------------------------------------------
 
 def test_variable_of_by_units():
     assert common.variable_of(_da("kg m**-2 s**-1")).key == "precipitation"
@@ -54,8 +50,6 @@ def test_legacy_tables_match_registry():
     assert common.PRECIP_UNIT_TO_MM_DAY["m s**-1"] == 86400.0 * 1000.0
     assert common.TEMP_UNIT_TO_C["K"] == -273.15
 
-
-# --- regiones --------------------------------------------------------------------------------
 
 def test_resolve_named_regions():
     assert common.resolve_region(CFG, "global") == common.Region("global", None)
@@ -105,8 +99,6 @@ def test_custom_box_gets_its_own_cache_file(tmp_path):
     b = common.raw_path(tmp_path, "ncep", "precipitation", 5, common.resolve_region(cfg, "6,-75,-2,-70"))
     assert a != b
 
-
-# --- valor mensual ---------------------------------------------------------------------------
 
 def test_monthly_mean_is_simple_mean_over_members():
     out = homogenize.reduce_lagged(_lagged_ds(), 5, 6)

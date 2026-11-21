@@ -25,15 +25,13 @@ cpt:Y\t4\t1
 """ + "".join(f"{1993 + k // 12}-{k % 12 + 1:02d}\t{10 * (k + 1)}\t{k + 1}\n" for k in range(27))
 
 
-# --- entrada para CPT ------------------------------------------------------------------------
-
 def test_batch_input_sequence():
     text = cpt_run.batch_input(CFG["area"], (1, 5))
     lines = text.splitlines()
     assert lines[:9] == ["612", "1", "X.txt", "6", "0", "-76", "-70", "1", "5"]
     assert lines[9:16] == ["2", "Y.txt", "6", "0", "-76", "-70", "3"]
     assert "311" in lines and "451" in lines and lines[-2:] == ["0", "0"]
-    for code in cpt_run.OUTPUTS:  # cada salida pedida lleva su nombre de archivo detrás
+    for code in cpt_run.OUTPUTS:
         assert lines[lines.index(code) + 1] == cpt_run.OUTPUTS[code]
 
 
@@ -46,8 +44,6 @@ def test_clean_output_removes_backspaced_text_and_colors():
     raw = b"\x1b[1mTitulo\x1b[0m\r\n C\x08P\x08T\x08 \x08 Northernmost latitude :"
     assert cpt_run.clean_output(raw) == "Titulo\n  Northernmost latitude :"
 
-
-# --- validación de lo que leyó CPT -----------------------------------------------------------
 
 def test_compare_grids_detects_changes(tmp_path):
     a = cpt.write_cpt(_field(np.arange(8).reshape(2, 2, 2)), tmp_path / "a.txt", "pr", 11, [2, 3, 4])
@@ -75,7 +71,7 @@ def test_read_cpt_grid_inherits_tags(tmp_path):
 def test_compare_predictand_is_seasonal_sum(tmp_path):
     y = tmp_path / "Y.txt"
     y.write_text(STATIONS_Y, encoding="utf-8")
-    # DJF 1993/94 = meses 12, 13, 14 (k = 11, 12, 13) -> A1 = 120+130+140, B2 = 12+13+14
+    # DJF 1993/94: A1 = 120+130+140, B2 = 12+13+14
     good = tmp_path / "Ycpt.txt"
     good.write_text("\tA1\tB2\n1993-12/1994-02\t390\t39\n", encoding="utf-8")
     assert cpt_run.compare_predictand(y, good, [1993])[0]
@@ -95,8 +91,6 @@ def test_forecast_table(tmp_path):
     np.testing.assert_allclose(df[["p_bajo", "p_normal", "p_sobre"]].sum(axis=1), 100)
 
 
-# --- ejecución de CPT ------------------------------------------------------------------------
-
 def _fake_cpt(tmp_path, code: str) -> list[str]:
     script = tmp_path / "fake_cpt.py"
     script.write_text(code, encoding="utf-8")
@@ -104,7 +98,6 @@ def _fake_cpt(tmp_path, code: str) -> list[str]:
 
 
 def test_endless_prompt_is_stopped(tmp_path):
-    """Si a CPT se le acaba la entrada repite la pregunta sin fin: se corta con un error claro."""
     argv = _fake_cpt(tmp_path, "import sys\nwhile True:\n    sys.stdout.write(' Number of modes :  ')\n")
     with pytest.raises(cpt_run.CPTError, match="entrada no prevista.*Number of modes"):
         cpt_run.run_cpt_batch(Path("x"), Path("."), tmp_path, "612\n", 30, argv=argv)
@@ -123,7 +116,7 @@ def test_missing_exe(tmp_path):
 
 
 def test_real_cpt_run_if_installed(tmp_path):
-    """Corrida real (NCEP, lluvia) si CPT y los archivos de ejemplo existen en esta máquina."""
+    """Corrida real si CPT y los archivos existen en esta máquina."""
     cfg = common.load_config()
     exe = Path(cfg["cpt_batch"]["exe"])
     x = Path("data") / "cpt" / "X_ncep_precipitation_i202611_colombia.txt"

@@ -8,8 +8,6 @@ import xarray as xr
 from ideam_seasonal import cpt, kairos
 
 
-# --- lectura de valores ----------------------------------------------------------------------
-
 def test_parse_models():
     assert kairos.parse_models(None) == ["ncep", "dwd", "bom"]
     assert kairos.parse_models(["dwd", "NCEP"]) == ["ncep", "dwd"]  # orden fijo, sin mayúsculas
@@ -44,11 +42,8 @@ def test_parse_years():
             kairos.parse_years(bad)
 
 
-# --- opciones y valores por defecto ----------------------------------------------------------
-
 @pytest.fixture
 def captured(monkeypatch):
-    """Reemplaza cpt.build: registra con qué se llamó, sin descargar nada."""
     calls = []
 
     def fake_build(models, variable, **kw):
@@ -103,8 +98,6 @@ def test_qc_subcommand(monkeypatch):
     monkeypatch.setattr(kairos, "run_qc", lambda args: seen.append(args.force))
     assert kairos.main(["qc", "--force"]) == 0 and seen == [True]
 
-
-# --- validaciones de cpt.build ---------------------------------------------------------------
 
 CFG = {"centres": {"ncep": {"years": [1993, 2016]}, "dwd": {"years": [1993, 2016]},
                    "bom": {"years": [1995, 2016]}}}

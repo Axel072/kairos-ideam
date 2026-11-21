@@ -105,16 +105,13 @@ def verify(path: Path, var: str | None = None) -> bool:
     return all(ok for ok, _ in results.values())
 
 
-# --- Predictando (Y) en formato CPT de estaciones ---------------------------------------------
-
-# CPT descarta por defecto una serie con más de 10 % de faltantes (C:\CPT\CPT.ini:
-# "Maximum % of missing Y data 10").
+# máximo de faltantes que admite CPT por defecto (cpt.ini)
 Y_MAX_MISSING = 0.10
 MONTHLY_TOTAL_UNITS = ("mm", "mm/month")
 
 
 def season_months(years, start_month: int, leads: list[int]) -> pd.DatetimeIndex:
-    """Meses calendario que forman la temporada (leads; lead 1 = mes de inicio) en cada año."""
+    """Lead 1 = mes de inicio."""
     out = []
     for y in years:
         for lead in leads:
@@ -125,7 +122,6 @@ def season_months(years, start_month: int, leads: list[int]) -> pd.DatetimeIndex
 
 def check_predictand(da: xr.DataArray, variable: str, years, start_month: int,
                      leads: list[int], region: Region) -> dict[str, Result]:
-    """Chequeos del Y: formato, longitudes, región, periodo, unidades, acumulación, faltantes."""
     res: dict[str, Result] = {}
     t = pd.DatetimeIndex(da["time"].values)
     res["formato"] = (bool(t.is_monotonic_increasing and t.is_unique),
@@ -172,7 +168,7 @@ def check_predictand(da: xr.DataArray, variable: str, years, start_month: int,
     else:
         res["unidades"] = (False, f"unidad '{unit}' no reconocida para precipitación")
 
-    # Acumulado desde enero (o desde la inicialización) crecería mes a mes dentro de cada año.
+    # un acumulado crecería mes a mes dentro de cada año
     full_years = [y for y, g in da.groupby("time.year") if g.sizes["time"] == 12]
     growing = [y for y in full_years
                if np.all(np.diff(da.sel(time=str(y)).mean("station").values) > 0)]
@@ -323,7 +319,6 @@ def build_report(raw: Path = Path("data") / "raw", processed: Path = Path("data"
 
 
 def _verify_configured_predictand(start_month: int) -> bool:
-    """Y de lluvia configurado, contra el hindcast de NCEP, la temporada y la región de CPT."""
     cfg = load_config()
     path = predictand_path(cfg, "precipitation")
     if path is None:

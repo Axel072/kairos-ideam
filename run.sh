@@ -1,4 +1,3 @@
 #!/usr/bin/env bash
-# Compatibilidad: equivale a `bash kairos.sh qc` (control de calidad de la Fase 2).
-#   bash run.sh [--force]
+# compatibilidad: equivale a kairos.sh qc
 exec bash "$(dirname "${BASH_SOURCE[0]}")/kairos.sh" qc "$@"

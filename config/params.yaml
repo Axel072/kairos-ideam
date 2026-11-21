@@ -23,17 +23,15 @@ chirps:
   url_template: "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/netcdf/by_year/chirps-v3.0.{year}.monthly.nc"
   years: [1993, 2016]
 
-# Predictando (Y) para CPT, por variable. Ruta relativa a la raíz del repositorio.
-# Entregado por el IDEAM (formato CPT de estaciones, mensual). Temperatura: sin definir.
+# Y para CPT por variable (entregado por el IDEAM), relativo a la raíz del repo
 predictand:
   precipitation: docs/PtandoY_Climatologia_Precipitacion_10_Estaciones_IDEAM.txt
 
-# CPT batch (corridas de prueba de ingreso: `bash kairos.sh --cpt`). En Linux, `exe` es la
-# ruta de CPT.x y `bin_dir` la carpeta donde está cpt.ini.
+# kairos.sh --cpt. En Linux: exe = CPT.x, bin_dir = carpeta de cpt.ini
 cpt_batch:
   exe: 'C:\CPT\CPT64_batch.exe'
   bin_dir: 'C:\CPT'
-  x_modes: [1, 5]       # PCR: mínimo y máximo de modos X (CPT elige el mejor por validación cruzada)
+  x_modes: [1, 5]       # PCR, mín. y máx.
   timeout_s: 900
 
 cpt:

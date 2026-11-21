@@ -1,8 +1,4 @@
-"""Escritura de los archivos de entrada de CPT (X, Z) y verificación del Y.
-
-Se usa desde `bash kairos.sh` (ver `ideam_seasonal.kairos`); `python -m ideam_seasonal.cpt`
-acepta las mismas opciones.
-"""
+"""Archivos de entrada de CPT (X, Z) y verificación del Y. Se usa desde kairos.sh."""
 from __future__ import annotations
 
 import datetime as dt
@@ -24,7 +20,6 @@ ENSEMBLE = "promedio"
 
 
 def season_mean(ds: xr.Dataset, leads: list[int]) -> xr.DataArray:
-    """Temporada: promedio de los valores mensuales (`monthly_mean`) de los leads dados."""
     return monthly_mean(ds).sel(lead=leads).mean("lead", keep_attrs=True)
 
 
@@ -111,7 +106,6 @@ def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads
 
 def forecast_files(cfg: dict, centres: list[str], variable: str, region: Region, force: bool,
                    start: tuple[int, int] | None) -> tuple[int, int, dict[str, Path], str]:
-    """Pronóstico (Z): el más reciente publicado o el del inicio pedido (año, mes)."""
     if start is None:
         year, month, paths = latest_forecast(cfg, centres, variable, region=region, force=force)
         print(f"Pronóstico más reciente: inicio {year}-{month:02d}")
@@ -130,7 +124,7 @@ def forecast_files(cfg: dict, centres: list[str], variable: str, region: Region,
 
 
 def hindcast_years(cfg: dict, centres: list[str], years: tuple[int, int] | None) -> tuple[int, int]:
-    """Periodo del hindcast: el pedido, que debe caber en el de todos los centros elegidos."""
+    """Debe caber en el periodo de todos los centros elegidos."""
     lo = max(cfg["centres"][c]["years"][0] for c in centres)
     hi = min(cfg["centres"][c]["years"][1] for c in centres)
     if years is None:
@@ -147,11 +141,7 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
           start: tuple[int, int] | None = None, leads: list[int] | None = None,
           years: tuple[int, int] | None = None, command: str | None = None,
           run_cpt: bool = False) -> list[Path]:
-    """X, Z (y verificación del Y) en formato CPT. Lo que no se pase sale de params.yaml.
-
-    Con `run_cpt`, además corre las corridas de prueba en CPT batch (A: cada modelo,
-    B: promedio) para las variables que tienen Y; ValueError si alguna no pasa.
-    """
+    """Lo que no se pase sale de params.yaml. `run_cpt`: corridas de prueba en CPT batch."""
     cfg = load_config()
     leads = leads or cfg["cpt"]["season_leads"]
     n_leads = len(cfg["leadtime_months"])
@@ -212,7 +202,7 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
 
 
 if __name__ == "__main__":
-    # Compatibilidad: `python -m ideam_seasonal.cpt ...` = `bash kairos.sh ...`
+    # compatibilidad: mismas opciones que kairos.sh
     import sys
 
     from ideam_seasonal.kairos import main

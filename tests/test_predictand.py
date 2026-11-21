@@ -12,7 +12,7 @@ YEARS = [1993, 1994]
 
 def _write(tmp_path, values=None, lon=(-75.0, -70.0), lat=(4.0, 1.0), start="1993-01",
            n=27, units="mm", missing="-999", header_tags=None, name="Y.txt"):
-    """Archivo CPT de estaciones como el del IDEAM (2 estaciones, mensual)."""
+    """Como el Y del IDEAM: estaciones, mensual, CRLF."""
     dates = pd.date_range(start, periods=n, freq="MS")
     if values is None:
         values = np.tile([[100.0, 200.0]], (n, 1))
@@ -22,7 +22,7 @@ def _write(tmp_path, values=None, lon=(-75.0, -70.0), lat=(4.0, 1.0), start="199
              "\tA1\tB2", "cpt:X\t" + "\t".join(map(str, lon)), "cpt:Y\t" + "\t".join(map(str, lat))]
     lines += [f"{d:%Y-%m}\t" + "\t".join(f"{v:g}" for v in row) for d, row in zip(dates, values)]
     p = tmp_path / name
-    p.write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8"))  # CRLF como el del IDEAM
+    p.write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8"))
     return p
 
 
@@ -98,7 +98,7 @@ def test_accumulated_from_january_detected(tmp_path):
 
 def test_too_many_missing_fails(tmp_path):
     vals = np.tile([[100.0, 200.0]], (27, 1))
-    vals[11:14, 0] = -999  # DJF 1993/94 completo de la estación A1: 3 de 6 meses -> 50 %
+    vals[11:14, 0] = -999  # DJF 1993/94 de A1: 50 % faltante
     res = _check(_write(tmp_path, values=vals))
     assert not res["faltantes"][0]
 

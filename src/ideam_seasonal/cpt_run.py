@@ -1,13 +1,4 @@
-"""Corridas de prueba en CPT batch: comprueban que X, Y y Z ingresan a CPT y dan una salida.
-
-Corrida A: cada modelo por separado. Corrida B: el promedio de los modelos. Método PCR con
-validación cruzada (configuración simple: son corridas de ingreso, no de habilidad).
-
-Cada corrida se hace en su propia carpeta (copias de X, Y y Z, la secuencia de entrada que
-recibió CPT y su salida completa), y se valida que lo que CPT leyó coincide con el origen:
-  - X y Z: los mismos valores, campo por campo;
-  - Y: CPT arma la temporada SUMANDO los meses del Y mensual (comprobado 2026-11-21).
-"""
+"""Corridas de prueba en CPT batch (A: cada modelo, B: promedio) y validación de lo leído."""
 from __future__ import annotations
 
 import datetime as dt
@@ -25,10 +16,10 @@ import pandas as pd
 
 from ideam_seasonal.common import Region, open_cpt_stations, read_cpt_grid
 
-# Archivos que se piden a CPT (agrega ".txt" al nombre).
+# CPT agrega ".txt"
 OUTPUTS = {"101": "X_leido_por_cpt", "102": "Y_leido_por_cpt", "542": "Z_leido_por_cpt",
            "511": "pronostico", "501": "probabilidades"}
-MAX_OUTPUT_BYTES = 5_000_000  # CPT repite la última pregunta sin fin si se le acaba la entrada
+MAX_OUTPUT_BYTES = 5_000_000  # sin entrada, CPT repite la última pregunta sin fin
 GLOBAL_DOMAIN = {"north": 90, "south": -90, "west": -180, "east": 180}
 
 
@@ -50,42 +41,35 @@ class RunResult:
         return all(ok for ok, _ in self.checks.values())
 
 
-# ---------------------------------------------------------------------------------------------
-# Entrada y ejecución
-# ---------------------------------------------------------------------------------------------
-
 def batch_input(area: dict | None, x_modes: tuple[int, int]) -> str:
-    """Secuencia de opciones de menú de CPT 18 (PCR) para X.txt, Y.txt y Z.txt en la carpeta."""
+    """Opciones de menú de CPT 18 (PCR)."""
     a = area or GLOBAL_DOMAIN
     dom = [a["north"], a["south"], a["west"], a["east"]]
     steps = ["612",                       # PCR
              "1", "X.txt", *dom, *x_modes,  # X, dominio, modos mín./máx.
-             "2", "Y.txt", *dom,           # Y y su dominio
-             "3", "Z.txt",                 # pronóstico (Z)
-             "512",                        # imprime la configuración usada (queda en el log)
+             "2", "Y.txt", *dom,
+             "3", "Z.txt",
+             "512",                        # imprime la configuración en el log
              "311",                        # validación cruzada
-             "451",                        # pronósticos (los imprime por estación)
+             "451",                        # pronósticos
              "111"]                        # guardar resultados
     for code, name in OUTPUTS.items():
         steps += [code, name]
-    steps += ["0", "0"]                    # salir del menú de resultados y de CPT
+    steps += ["0", "0"]                    # salir
     return "\n".join(str(s) for s in steps) + "\n"
 
 
 def clean_output(raw: bytes) -> str:
-    """Quita colores ANSI y el texto que CPT borra con retrocesos ("C\\bP\\bT\\b")."""
+    """Quita colores ANSI y el texto que CPT borra con retrocesos."""
     txt = re.sub(r"\x1b\[[0-9;]*m", "", raw.decode("latin-1"))
     txt = re.sub(r".\x08", "", txt)
     txt = txt.replace("\r\n", "\n").replace("\r", "\n")
-    return re.sub(r"[\x00-\x08\x0b-\x1f]", "", txt)  # resto de caracteres de control
+    return re.sub(r"[\x00-\x08\x0b-\x1f]", "", txt)
 
 
 def run_cpt_batch(exe: Path, bin_dir: Path, run_dir: Path, stdin_text: str,
                   timeout_s: float, argv: list[str] | None = None) -> str:
-    """Corre CPT batch en `run_dir`; devuelve la salida limpia. CPTError si no termina bien.
-
-    `argv` reemplaza el comando (solo para tests).
-    """
+    """`argv` reemplaza el comando (tests)."""
     if argv is None and not exe.exists():
         raise CPTError(f"no se encontró CPT batch en {exe} (config/params.yaml: cpt_batch.exe)")
     env = dict(os.environ, CPT_BIN_DIR=str(bin_dir))
@@ -128,10 +112,6 @@ def run_cpt_batch(exe: Path, bin_dir: Path, run_dir: Path, stdin_text: str,
     return out
 
 
-# ---------------------------------------------------------------------------------------------
-# Validación de lo que leyó CPT
-# ---------------------------------------------------------------------------------------------
-
 def compare_grids(src: Path, cpt: Path) -> tuple[bool, str]:
     a, b = read_cpt_grid(src), read_cpt_grid(cpt)
     if list(a) != list(b):
@@ -146,7 +126,6 @@ def compare_grids(src: Path, cpt: Path) -> tuple[bool, str]:
 
 
 def _station_rows(path: Path) -> list[tuple[str, list[str], np.ndarray]]:
-    """Filas (fecha, estaciones, valores) de una salida de estaciones de CPT."""
     ids, rows = [], []
     for ln in Path(path).read_text(encoding="utf-8").splitlines():
         cells = ln.split("\t")
@@ -158,7 +137,7 @@ def _station_rows(path: Path) -> list[tuple[str, list[str], np.ndarray]]:
 
 
 def compare_predictand(src: Path, cpt: Path, years: list[int]) -> tuple[bool, str]:
-    """La temporada que armó CPT = suma de los meses del Y mensual, en los años del hindcast."""
+    """CPT arma la temporada sumando los meses del Y (comprobado 2026-11-21)."""
     y = open_cpt_stations(src)
     rows = _station_rows(cpt)
     first_years = [int(t[:4]) for t, _, _ in rows]
@@ -183,10 +162,6 @@ def forecast_table(run_dir: Path) -> pd.DataFrame:
     df.attrs["temporada"] = t
     return df
 
-
-# ---------------------------------------------------------------------------------------------
-# Corridas
-# ---------------------------------------------------------------------------------------------
 
 def run_one(name: str, x: Path, y: Path, z: Path, run_dir: Path, batch_cfg: dict,
             region: Region, years: list[int]) -> RunResult:
@@ -260,7 +235,6 @@ def write_log(path: Path, results: list[RunResult], variable: str, tag: str, reg
 def run_all(files: dict[str, dict[str, Path]], y: Path, out_dir: Path, variable: str, tag: str,
             region: Region, batch_cfg: dict, years: list[int],
             command: str | None = None) -> tuple[list[RunResult], Path]:
-    """Una corrida por modelo (A) y una del promedio (B), si existe. Devuelve resultados y log."""
     results = []
     base = out_dir / "corridas_cpt"
     for name, xz in files.items():

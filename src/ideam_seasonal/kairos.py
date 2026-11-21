@@ -1,8 +1,6 @@
-"""Comando único: archivos de entrada de CPT (X, Z) con el pronóstico más reciente.
+"""Archivos de entrada de CPT (X, Z) con el pronóstico más reciente del CDS.
 
-Sin opciones usa config/params.yaml: pronóstico más reciente publicado en el CDS, hindcast
-del mismo mes de inicio, los tres modelos y su promedio, lluvia y temperatura, región y
-temporada de `cpt`. Cada opción reemplaza ese valor solo en esta corrida.
+Sin opciones usa config/params.yaml; cada opción reemplaza ese valor solo en esta corrida.
 
 Ejemplos:
   bash kairos.sh
@@ -26,12 +24,8 @@ from ideam_seasonal.common import CENTRES, load_config, resolve_region
 VARIABLES_CLI = ("precipitation", "temperature")
 
 
-# ---------------------------------------------------------------------------------------------
-# Lectura de valores (errores claros para argparse)
-# ---------------------------------------------------------------------------------------------
-
 def parse_models(values: list[str] | None) -> list[str]:
-    """`-m ncep -m dwd` o `-m ncep,dwd` -> ['ncep', 'dwd'] (orden de CENTRES, sin repetir)."""
+    """Acepta `-m ncep -m dwd` o `-m ncep,dwd`; devuelve en el orden de CENTRES."""
     if not values:
         return list(CENTRES)
     asked = {v.strip().lower() for item in values for v in item.split(",") if v.strip()}
@@ -43,7 +37,6 @@ def parse_models(values: list[str] | None) -> list[str]:
 
 
 def parse_start(text: str) -> tuple[int, int]:
-    """'2026-10' -> (2026, 10)."""
     try:
         y, m = (int(p) for p in text.split("-"))
     except ValueError:
@@ -54,7 +47,7 @@ def parse_start(text: str) -> tuple[int, int]:
 
 
 def parse_leads(text: str) -> list[int]:
-    """'2-4' -> [2, 3, 4]; '3' -> [3]. Lead 1 = mes de inicio."""
+    """'2-4' -> [2, 3, 4]. Lead 1 = mes de inicio."""
     try:
         parts = [int(p) for p in text.split("-")]
     except ValueError:
@@ -67,7 +60,6 @@ def parse_leads(text: str) -> list[int]:
 
 
 def parse_years(text: str) -> tuple[int, int]:
-    """'1993-2016' -> (1993, 2016)."""
     try:
         y0, y1 = (int(p) for p in text.split("-"))
     except ValueError:
@@ -76,10 +68,6 @@ def parse_years(text: str) -> tuple[int, int]:
         raise argparse.ArgumentTypeError(f"años '{text}': el primero debe ser menor o igual")
     return y0, y1
 
-
-# ---------------------------------------------------------------------------------------------
-# Opciones
-# ---------------------------------------------------------------------------------------------
 
 def build_parser(cfg: dict) -> argparse.ArgumentParser:
     c = cfg["cpt"]
@@ -119,10 +107,6 @@ def build_qc_parser() -> argparse.ArgumentParser:
     p.add_argument("-f", "--force", action="store_true", help="vuelve a descargar")
     return p
 
-
-# ---------------------------------------------------------------------------------------------
-# Corridas
-# ---------------------------------------------------------------------------------------------
 
 def run_cpt(args: argparse.Namespace, command: str) -> list[Path]:
     from ideam_seasonal import cpt
@@ -168,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         parser = build_parser(cfg)
         args = parser.parse_args(argv)
-        try:  # errores de opciones antes de descargar nada
+        try:  # validar antes de descargar nada
             resolve_region(cfg, args.region, default=cfg["cpt"]["region"])
             args.modelo = parse_models(args.modelo)
         except (ValueError, argparse.ArgumentTypeError) as e:

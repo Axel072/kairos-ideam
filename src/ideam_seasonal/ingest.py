@@ -13,7 +13,7 @@ from ideam_seasonal.common import (Region, chirps_path, load_config, raw_path,  
 def build_request(cfg: dict, centre: str, variable: str = "precipitation",
                   region: Region | None = None, month: int | None = None,
                   years: list[int] | None = None) -> dict:
-    """Request del CDS desde la config. Sin `region`, la caja de prueba (`area`)."""
+    """Sin `region`, la caja de prueba (`area`)."""
     c = cfg["centres"][centre]
     if None in (c["originating_centre"], c["system"], c["years"]):
         raise NotImplementedError(
@@ -46,7 +46,7 @@ def download(cfg: dict, centre: str, variable: str = "precipitation",
              out_dir: Path = Path("data") / "raw", region: Region | None = None,
              force: bool = False, month: int | None = None,
              forecast_year: int | None = None) -> Path:
-    """Descarga con caché por request (el GRIB se reutiliza si el request guardado es igual)."""
+    """Reutiliza el GRIB si el request guardado es igual."""
     region = region or resolve_region(cfg)
     month = month or cfg["month"]
     years = [forecast_year] if forecast_year else None
@@ -69,13 +69,7 @@ def download(cfg: dict, centre: str, variable: str = "precipitation",
 
 
 def forecast_unavailable(exc: BaseException) -> bool:
-    """¿El CDS rechazó la fecha porque ese pronóstico aún no está publicado?
-
-    Comprobado contra el CDS el 2026-11-21: pedir un pronóstico no publicado da HTTPError 400
-    con el error de MARS "AccessError: Restricted access to current C3S seasonal forecast
-    non-ECMWF contribution. Please check that your date selection is valid". Credenciales (401),
-    licencia (403), cuota, errores del servidor (5xx) o de red NO cuentan: esos se propagan.
-    """
+    """Pronóstico aún no publicado: HTTPError 400 con error de MARS (comprobado 2026-11-21)."""
     from requests import HTTPError
 
     if not isinstance(exc, HTTPError):
@@ -85,7 +79,6 @@ def forecast_unavailable(exc: BaseException) -> bool:
 
 
 def _mars_reason(exc: BaseException) -> str:
-    """Primera línea 'XxxError: ...' del log de MARS (p. ej. AccessError: Restricted access...)."""
     for line in str(exc).splitlines():
         msg = line.split(" - ")[-1].strip()
         if line.lower().startswith("mars") and "Error:" in msg:
@@ -97,11 +90,7 @@ def latest_forecast(cfg: dict, centres, variable: str = "precipitation",
                     region: Region | None = None, force: bool = False,
                     today: dt.date | None = None,
                     months_back: int = 3) -> tuple[int, int, dict[str, Path]]:
-    """Pronóstico más reciente disponible para TODOS los centros, desde el mes de `today`.
-
-    Solo retrocede un mes si el CDS indica que el pronóstico aún no está publicado
-    (`forecast_unavailable`); cualquier otro error se propaga con su mensaje original.
-    """
+    """Último mes publicado para todos los centros; solo retrocede si no está publicado."""
     today = today or dt.date.today()
     y, m = today.year, today.month
     for _ in range(months_back):
@@ -121,7 +110,7 @@ def latest_forecast(cfg: dict, centres, variable: str = "precipitation",
 
 def download_chirps_year(cfg: dict, year: int, out_dir: Path = Path("data") / "raw",
                          force: bool = False) -> Path:
-    """Baja un año de CHIRPS, lo recorta a la caja de prueba (`area`) y borra el global."""
+    """Un año de CHIRPS recortado a la caja de prueba."""
     import requests
     import xarray as xr
 

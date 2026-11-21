@@ -15,10 +15,7 @@ from ideam_seasonal.common import (CENTRES, VARIABLES, apply_conversion, chirps_
 
 
 def _lagged_arrays(ds: xr.Dataset):
-    """Variable, arreglo (number, time, step, lat, lon), fechas de inicio y valid_time (time, step).
-
-    Un pronóstico con una sola inicialización llega sin dimensión `time`: se le agrega.
-    """
+    """Un pronóstico con una sola inicialización llega sin dimensión `time`: se agrega."""
     da = ds[next(iter(ds.data_vars))]
     if "time" not in da.dims:
         da = da.expand_dims("time")
@@ -31,11 +28,6 @@ def _lagged_arrays(ds: xr.Dataset):
 
 def _member_index(member, init: pd.DatetimeIndex, valid: np.ndarray, has: np.ndarray,
                   years: np.ndarray, start_month: int, n_leads: int):
-    """Para un miembro: posiciones (time, step) con datos y su (índice de año, lead).
-
-    Falla si el valid_time no cae al inicio de mes, si el lead se sale de 1..n_leads o si un
-    (año, lead) aparece dos veces.
-    """
     ti, si = np.nonzero(has)
     vt = pd.DatetimeIndex(valid[ti, si])
     if not ((vt.day == 1) & (vt.hour == 0)).all():
@@ -52,16 +44,10 @@ def _member_index(member, init: pd.DatetimeIndex, valid: np.ndarray, has: np.nda
 
 
 def reduce_lagged(ds: xr.Dataset, start_month: int, n_leads: int) -> xr.Dataset:
-    """Reduce el producto cartesiano (number, time, step) a (year, member, lead).
-
-    Cada inicialización (día y ciclo) de un ensamble *lagged* queda como un miembro; el valor
-    mensual (promedio simple de todos) lo da `monthly_mean`. Convierte a la unidad estándar
-    de la variable y falla, sin rellenar, si la unidad es desconocida o acumulada o si queda
-    algún NaN.
-    """
+    """(number, time, step) -> (year, member, lead); cada inicialización queda como miembro."""
     da, arr, init, valid = _lagged_arrays(ds)
     var = variable_of(da)
-    conv = conversion(da)  # valida la unidad antes de recorrer los datos
+    conv = conversion(da)  # falla antes de recorrer si la unidad no sirve
 
     has = ~np.isnan(arr).all(axis=(3, 4))  # (number, time, step)
     years = np.sort(np.unique(init.year))
@@ -92,12 +78,7 @@ def reduce_lagged(ds: xr.Dataset, start_month: int, n_leads: int) -> xr.Dataset:
 
 
 def monthly_mean(ds: xr.Dataset) -> xr.DataArray:
-    """Valor mensual: promedio simple (mismo peso) de todos los miembros -> (year, lead, lat, lon).
-
-    Decisión del cliente: cuando un mes tiene varios valores (varios días e inicializaciones de
-    un ensamble *lagged*, o varios miembros de una misma inicialización como en DWD) se
-    promedian todos por igual y queda un solo valor por mes.
-    """
+    """Promedio simple de todos los miembros (decisión del cliente)."""
     return ds[VARIABLES[ds.attrs["variable"]].short].mean("member", keep_attrs=True)
 
 
