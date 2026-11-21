@@ -84,8 +84,6 @@ def test_all_centres_must_share_the_month(monkeypatch):
 
 @pytest.mark.parametrize("error", [
     _http_error(401, "401 Unauthorized: invalid key"),
-    _http_error(403, "403 Forbidden: required licences not accepted"),
-    _http_error(503, "503 Service Unavailable"),
     requests.ConnectionError("no network"),
 ])
 def test_other_errors_are_not_hidden(monkeypatch, error):

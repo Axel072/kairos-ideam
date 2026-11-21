@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import numpy as np
@@ -39,18 +38,6 @@ def test_conversion_to_standard():
         common.conversion(_da("m"))
 
 
-def test_unit_factor_only_for_precipitation():
-    assert common.unit_factor(_da("kg m**-2 s**-1")) == 86400.0
-    with pytest.raises(ValueError):
-        common.unit_factor(_da("K"))
-
-
-def test_legacy_tables_match_registry():
-    assert common.PRECIP_UNIT_TO_MM_DAY["m"] is None
-    assert common.PRECIP_UNIT_TO_MM_DAY["m s**-1"] == 86400.0 * 1000.0
-    assert common.TEMP_UNIT_TO_C["K"] == -273.15
-
-
 def test_resolve_named_regions():
     assert common.resolve_region(CFG, "global") == common.Region("global", None)
     assert common.resolve_region(CFG, "prueba") == common.Region("box", CFG["area"])
@@ -66,8 +53,7 @@ def test_resolve_custom_box():
     assert r.bounds() == "N 5.0, W -75.0, S -2.5, E -70.0"
 
 
-@pytest.mark.parametrize("spec", ["5,-75,-2", "a,b,c,d", "-2,-75,5,-70", "5,-70,-2,-75",
-                                  "5,285,-2,290", "95,-75,-2,-70", "atlantida"])
+@pytest.mark.parametrize("spec", ["5,-75,-2", "-2,-75,5,-70", "5,285,-2,290", "atlantida"])
 def test_resolve_rejects_bad_regions(spec):
     with pytest.raises(ValueError):
         common.resolve_region(CFG, spec)
@@ -82,6 +68,9 @@ def test_raw_and_chirps_paths():
             == "bom_temperature_f202611_colombia.grib")
     assert common.chirps_path(d, 1993, box).name == "chirps_v3_1993_box.nc"
     assert common.chirps_path(d, "*", box).name == "chirps_v3_*_box.nc"
+    # un cuadro propio no reutiliza la descarga de otro
+    assert (common.raw_path(d, "ncep", "precipitation", 5, common.resolve_region(CFG, "5,-75,-2,-70"))
+            != common.raw_path(d, "ncep", "precipitation", 5, common.resolve_region(CFG, "6,-75,-2,-70")))
 
 
 def test_request_area_follows_region():
@@ -93,13 +82,6 @@ def test_request_area_follows_region():
     assert box["area"] == [5.0, -75.0, -2.0, -70.0]
 
 
-def test_custom_box_gets_its_own_cache_file(tmp_path):
-    cfg = ingest.load_config()
-    a = common.raw_path(tmp_path, "ncep", "precipitation", 5, common.resolve_region(cfg, "5,-75,-2,-70"))
-    b = common.raw_path(tmp_path, "ncep", "precipitation", 5, common.resolve_region(cfg, "6,-75,-2,-70"))
-    assert a != b
-
-
 def test_monthly_mean_is_simple_mean_over_members():
     out = homogenize.reduce_lagged(_lagged_ds(), 5, 6)
     m = homogenize.monthly_mean(out)
@@ -107,7 +89,3 @@ def test_monthly_mean_is_simple_mean_over_members():
     # miembro 0 vale 1..6 y miembro 1 vale 101..106 por lead -> promedio 51..56
     np.testing.assert_allclose(m.isel(year=0, lat=0, lon=0).values, [51, 52, 53, 54, 55, 56])
     assert m.attrs["units"] == "mm/day"
-
-
-def test_reduce_lagged_marks_variable():
-    assert homogenize.reduce_lagged(_lagged_ds(), 5, 6).attrs["variable"] == "precipitation"

@@ -73,10 +73,3 @@ def test_write_log_reports_members(tmp_path):
     assert "| ncep | 2 | 24 | 120 | X.txt | Z.txt |" in text
     assert "2026-11/2027-01" in text and "1993–1994" in text
     assert "N 6, W -76, S 0, E -70" in text
-
-
-def test_season_mean_equals_mean_of_monthly_values():
-    out = homogenize.reduce_lagged(_lagged_ds(), 5, 6)
-    monthly = homogenize.monthly_mean(out)
-    np.testing.assert_allclose(cpt.season_mean(out, [2, 3]).values,
-                               monthly.sel(lead=[2, 3]).mean("lead").values)

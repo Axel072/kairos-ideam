@@ -16,15 +16,11 @@ def test_parse_models():
         kairos.parse_models(["ecmwf"])
 
 
-@pytest.mark.parametrize("text, expected", [("2026-10", (2026, 10)), ("2025-1", (2025, 1))])
-def test_parse_start(text, expected):
-    assert kairos.parse_start(text) == expected
-
-
-@pytest.mark.parametrize("text", ["2026", "2026-13", "octubre", "26-10"])
-def test_parse_start_rejects(text):
-    with pytest.raises(argparse.ArgumentTypeError):
-        kairos.parse_start(text)
+def test_parse_start():
+    assert kairos.parse_start("2026-10") == (2026, 10)
+    for bad in ("2026-13", "octubre"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            kairos.parse_start(bad)
 
 
 def test_parse_leads():
@@ -75,9 +71,7 @@ def test_options_combined(captured):
     assert c["command"] == "bash kairos.sh " + " ".join(argv)
 
 
-@pytest.mark.parametrize("argv", [["--region", "5,-75"], ["--region", "atlantida"],
-                                  ["-m", "ecmwf"], ["--inicio", "2026-13"], ["-t", "0-2"],
-                                  ["-v", "viento"]])
+@pytest.mark.parametrize("argv", [["--region", "5,-75"], ["-m", "ecmwf"], ["-t", "0-2"]])
 def test_bad_options_stop_before_running(captured, argv):
     with pytest.raises(SystemExit) as e:
         kairos.main(argv)

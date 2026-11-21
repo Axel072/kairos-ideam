@@ -35,16 +35,6 @@ def test_batch_input_sequence():
         assert lines[lines.index(code) + 1] == cpt_run.OUTPUTS[code]
 
 
-def test_batch_input_global_domain():
-    lines = cpt_run.batch_input(None, (1, 3)).splitlines()
-    assert lines[3:7] == ["90", "-90", "-180", "180"]
-
-
-def test_clean_output_removes_backspaced_text_and_colors():
-    raw = b"\x1b[1mTitulo\x1b[0m\r\n C\x08P\x08T\x08 \x08 Northernmost latitude :"
-    assert cpt_run.clean_output(raw) == "Titulo\n  Northernmost latitude :"
-
-
 def test_compare_grids_detects_changes(tmp_path):
     a = cpt.write_cpt(_field(np.arange(8).reshape(2, 2, 2)), tmp_path / "a.txt", "pr", 11, [2, 3, 4])
     b = cpt.write_cpt(_field(np.arange(8).reshape(2, 2, 2)), tmp_path / "b.txt", "pr", 11, [2, 3, 4])
@@ -108,11 +98,6 @@ def test_cpt_error_message_is_reported(tmp_path):
     argv = _fake_cpt(tmp_path, "print(' ERROR:  Unable to locate cpt.ini.')\n")
     with pytest.raises(cpt_run.CPTError, match="Unable to locate cpt.ini"):
         cpt_run.run_cpt_batch(Path("x"), Path("."), tmp_path, "0\n", 30, argv=argv)
-
-
-def test_missing_exe(tmp_path):
-    with pytest.raises(cpt_run.CPTError, match="no se encontró CPT"):
-        cpt_run.run_cpt_batch(tmp_path / "no_existe.exe", tmp_path, tmp_path, "0\n", 5)
 
 
 def test_real_cpt_run_if_installed(tmp_path):

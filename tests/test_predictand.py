@@ -36,13 +36,9 @@ def test_reader(tmp_path):
     assert da.dims == ("time", "station") and list(da["station"].values) == ["A1", "B2"]
     assert da.attrs["units"] == "mm" and list(da["lon"].values) == [-75.0, -70.0]
     assert pd.Timestamp(da["time"].values[0]) == pd.Timestamp(1993, 1, 1)
-
-
-def test_reader_missing_to_nan(tmp_path):
     vals = np.tile([[100.0, 200.0]], (27, 1))
     vals[3, 1] = -999
-    da = common.open_cpt_stations(_write(tmp_path, values=vals))
-    assert int(da.isnull().sum()) == 1
+    assert int(common.open_cpt_stations(_write(tmp_path, values=vals)).isnull().sum()) == 1
 
 
 @pytest.mark.parametrize("kwargs, match", [
