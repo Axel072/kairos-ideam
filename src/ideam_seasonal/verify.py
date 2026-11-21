@@ -11,17 +11,17 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from ideam_seasonal.common import (CENTRES, PRECIP_UNIT_TO_MM_DAY, TEMP_UNIT_TO_C, get_units,
-                                   is_temperature, open_grib, unit_factor)
-from ideam_seasonal.ingest import load_config
+from ideam_seasonal.common import (CENTRES, PRECIP_UNIT_TO_MM_DAY, TEMP_UNIT_TO_C, VARIABLES,
+                                   chirps_path, get_units, is_temperature, load_config, open_grib,
+                                   processed_path, raw_path, resolve_region, unit_factor)
 
 Result = tuple[bool, str]
 
 LEAD_DIMS = ("forecastMonth", "step", "leadtime_month")
 MEMBER_DIMS = ("number", "member")
 
-PRECIP_MM_DAY_RANGE = (0.0, 40.0)
-TEMP_C_RANGE = (-60.0, 45.0)
+PRECIP_MM_DAY_RANGE = VARIABLES["precipitation"].plausible
+TEMP_C_RANGE = VARIABLES["temperature"].plausible
 
 
 def _find_dim(da: xr.DataArray, candidates) -> str | None:
@@ -122,7 +122,7 @@ def check_chirps(paths: list[Path]) -> dict:
 
 
 def _homogenized_section(processed: Path, variable: str, month: int, y0: int, y1: int) -> list[str]:
-    path = processed / f"homogeneizado_{variable}_m{month:02d}_box.nc"
+    path = processed_path(processed, variable, month, resolve_region(load_config(), "prueba"))
     if not path.exists():
         raise FileNotFoundError(f"falta {path}; corre `python -m ideam_seasonal.homogenize`")
     pt = {"lat": POINT["lat"], "lon": POINT["lon"]}
@@ -158,9 +158,10 @@ def build_report(raw: Path = Path("data") / "raw", processed: Path = Path("data"
     cfg = load_config()
     a, month = cfg["area"], cfg["month"]
     y0, y1 = cfg["centres"]["ncep"]["years"]
+    region = resolve_region(cfg, "prueba")
     fc = {}
     for c in CENTRES:
-        path = raw / f"{c}_{variable}_m{month:02d}_box.grib"
+        path = raw_path(raw, c, variable, month, region)
         ds = open_grib(path)
         da = ds[next(iter(ds.data_vars))]
         fc[c] = {
@@ -170,7 +171,7 @@ def build_report(raw: Path = Path("data") / "raw", processed: Path = Path("data"
             "acc_check": check_accumulation(da), "nan_frac": float(da.isnull().mean()),
             "lat0": float(ds.latitude.values[0]), "lat1": float(ds.latitude.values[-1]),
         }
-    chirps_paths = sorted(raw.glob("chirps_v3_*_box.nc"))
+    chirps_paths = sorted(raw.glob(chirps_path(raw, "*", region).name))
     ch = check_chirps(chirps_paths)
 
     L = ["# Informe de control de calidad — Fase 2 (ingesta)", "",

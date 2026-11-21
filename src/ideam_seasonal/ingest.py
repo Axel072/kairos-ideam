@@ -6,20 +6,14 @@ import datetime as dt
 import json
 from pathlib import Path
 
-import yaml
-
-CONFIG_PATH = Path("config") / "params.yaml"
-
-
-def load_config(path: Path = CONFIG_PATH) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+from ideam_seasonal.common import (Region, chirps_path, load_config, raw_path,  # noqa: F401
+                                   resolve_region)
 
 
 def build_request(cfg: dict, centre: str, variable: str = "precipitation",
-                  use_area: bool = True, month: int | None = None,
-                  years: list[int] | None = None, area: dict | None = None) -> dict:
-    """Request del CDS desde la config; `use_area=False` es global."""
+                  region: Region | None = None, month: int | None = None,
+                  years: list[int] | None = None) -> dict:
+    """Request del CDS desde la config. Sin `region`, la caja de prueba (`area`)."""
     c = cfg["centres"][centre]
     if None in (c["originating_centre"], c["system"], c["years"]):
         raise NotImplementedError(
@@ -28,6 +22,7 @@ def build_request(cfg: dict, centre: str, variable: str = "precipitation",
         )
     if variable not in cfg["variables"]:
         raise NotImplementedError(f"Variable '{variable}' no confirmada (ver hallazgos.md).")
+    region = region or resolve_region(cfg)
     start, end = c["years"]
     month = month or cfg["month"]
     years = years or list(range(start, end + 1))
@@ -41,33 +36,31 @@ def build_request(cfg: dict, centre: str, variable: str = "precipitation",
         "leadtime_month": [str(m) for m in cfg["leadtime_months"]],
         "data_format": cfg["data_format"],
     }
-    if use_area:
-        a = area or cfg["area"]
+    if region.area is not None:
+        a = region.area
         request["area"] = [a["north"], a["west"], a["south"], a["east"]]
     return request
 
 
 def download(cfg: dict, centre: str, variable: str = "precipitation",
-             out_dir: Path = Path("data") / "raw", use_area: bool = True,
+             out_dir: Path = Path("data") / "raw", region: Region | None = None,
              force: bool = False, month: int | None = None,
-             forecast_year: int | None = None, area: dict | None = None,
-             region: str | None = None) -> Path:
-    """Descarga con caché por request."""
+             forecast_year: int | None = None) -> Path:
+    """Descarga con caché por request (el GRIB se reutiliza si el request guardado es igual)."""
+    region = region or resolve_region(cfg)
     month = month or cfg["month"]
     years = [forecast_year] if forecast_year else None
-    request = build_request(cfg, centre, variable, use_area, month, years, area)
+    request = build_request(cfg, centre, variable, region, month, years)
     out_dir.mkdir(parents=True, exist_ok=True)
-    tag = f"f{forecast_year}{month:02d}" if forecast_year else f"m{month:02d}"
-    region = region or ("box" if use_area else "global")
-    stem = f"{centre}_{variable}_{tag}_{region}"
-    target, sidecar = out_dir / f"{stem}.grib", out_dir / f"{stem}.request.json"
+    target = raw_path(out_dir, centre, variable, month, region, forecast_year)
+    sidecar = target.with_suffix(".request.json")
     cached = (target.exists() and sidecar.exists()
               and json.loads(sidecar.read_text(encoding="utf-8")) == request)
     if cached and not force:
         print(f"[cache] {target}")
         return target
 
-    import cdsapi 
+    import cdsapi
 
     cdsapi.Client().retrieve(cfg["dataset"], request).download(str(target))
     sidecar.write_text(json.dumps(request, indent=2), encoding="utf-8")
@@ -76,17 +69,17 @@ def download(cfg: dict, centre: str, variable: str = "precipitation",
 
 
 def latest_forecast(cfg: dict, centres, variable: str = "precipitation",
-                    use_area: bool = True, force: bool = False, today: dt.date | None = None,
-                    months_back: int = 3, area: dict | None = None,
-                    region: str | None = None) -> tuple[int, int, dict[str, Path]]:
+                    region: Region | None = None, force: bool = False,
+                    today: dt.date | None = None,
+                    months_back: int = 3) -> tuple[int, int, dict[str, Path]]:
     from requests import HTTPError
 
     today = today or dt.date.today()
     y, m = today.year, today.month
     for _ in range(months_back):
         try:
-            paths = {c: download(cfg, c, variable, use_area=use_area, force=force,
-                                 month=m, forecast_year=y, area=area, region=region)
+            paths = {c: download(cfg, c, variable, region=region, force=force,
+                                 month=m, forecast_year=y)
                      for c in centres}
             return y, m, paths
         except HTTPError:
@@ -97,13 +90,14 @@ def latest_forecast(cfg: dict, centres, variable: str = "precipitation",
 
 def download_chirps_year(cfg: dict, year: int, out_dir: Path = Path("data") / "raw",
                          force: bool = False) -> Path:
-    """Baja un año de CHIRPS, lo recorta a `area` y borra el global."""
+    """Baja un año de CHIRPS, lo recorta a la caja de prueba (`area`) y borra el global."""
     import requests
     import xarray as xr
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    a = cfg["area"]
-    target = out_dir / f"chirps_v3_{year}_box.nc"
+    region = resolve_region(cfg, "prueba")
+    a = region.area
+    target = chirps_path(out_dir, year, region)
     if target.exists() and not force:
         print(f"[cache] {target}")
         return target
@@ -139,7 +133,8 @@ def main() -> None:
         for y in ([a.year] if a.year else range(y0, y1 + 1)):
             download_chirps_year(cfg, y, force=a.force)
         return
-    download(cfg, a.centre, a.variable, use_area=not a.is_global, force=a.force)
+    region = resolve_region(cfg, "global" if a.is_global else "prueba")
+    download(cfg, a.centre, a.variable, region=region, force=a.force)
 
 
 if __name__ == "__main__":

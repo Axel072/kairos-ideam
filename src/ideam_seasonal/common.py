@@ -1,49 +1,195 @@
+"""Constantes y funciones compartidas: configuración, variables, regiones, nombres de archivo."""
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
 import xarray as xr
+import yaml
 
 CENTRES = ("ncep", "dwd", "bom")
 
-PRECIP_UNIT_TO_MM_DAY = {
-    "kg m**-2 s**-1": 86400.0,
-    "m s**-1": 86400.0 * 1000.0,
-    "m": None,
-    "mm/day": 1.0,
+# Raíz del repositorio (src/ideam_seasonal/common.py -> ../../); no depende del directorio
+# desde el que se ejecute.
+ROOT = Path(__file__).resolve().parents[2]
+CONFIG_PATH = ROOT / "config" / "params.yaml"
+
+
+def load_config(path: Path = CONFIG_PATH) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+# ---------------------------------------------------------------------------------------------
+# Variables
+# ---------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Variable:
+    """Una variable y cómo pasar cada unidad declarada a la unidad estándar.
+
+    `conversions[unidad] = (escala, desplazamiento)`: estándar = valor * escala + desplazamiento.
+    `None` marca una unidad reconocida pero acumulada (hay que desacumular antes).
+    """
+    key: str
+    short: str
+    units: str
+    long_name: str
+    plausible: tuple[float, float]  # rango plausible de la MEDIA, en unidades estándar
+    conversions: dict[str, tuple[float, float] | None] = field(default_factory=dict)
+    accumulable: bool = False
+
+
+VARIABLES = {
+    "precipitation": Variable(
+        key="precipitation", short="pr", units="mm/day",
+        long_name="precipitación, tasa media mensual",
+        plausible=(0.0, 40.0),
+        conversions={
+            "kg m**-2 s**-1": (86400.0, 0.0),
+            "m s**-1": (86400.0 * 1000.0, 0.0),
+            "m": None,
+            "mm/day": (1.0, 0.0),
+        },
+        accumulable=True),
+    "temperature": Variable(
+        key="temperature", short="tas", units="Celsius",
+        long_name="temperatura media del aire a 2 m",
+        plausible=(-60.0, 45.0),
+        conversions={"K": (1.0, -273.15), "C": (1.0, 0.0), "degC": (1.0, 0.0)}),
 }
 
-
-TEMP_UNIT_TO_C = {"K": -273.15, "C": 0.0, "degC": 0.0}
+# Vistas por variable que usa verify.py (derivadas del registro, no se editan aparte).
+PRECIP_UNIT_TO_MM_DAY = {u: (c[0] if c else None)
+                         for u, c in VARIABLES["precipitation"].conversions.items()}
+TEMP_UNIT_TO_C = {u: c[1] for u, c in VARIABLES["temperature"].conversions.items()}
 
 
 def get_units(da: xr.DataArray) -> str | None:
     return da.attrs.get("units") or da.attrs.get("GRIB_units")
 
 
-def unit_factor(da: xr.DataArray) -> float:
-    """Factor a mm/día de la unidad declarada; ValueError si falta, no se reconoce o es acumulada."""
+def variable_of(da: xr.DataArray) -> Variable:
+    """Variable según la unidad declarada; ValueError si falta o no está en el registro."""
     unit = get_units(da)
     if unit is None:
         raise ValueError("sin atributo units")
-    if unit not in PRECIP_UNIT_TO_MM_DAY:
-        raise ValueError(f"unidad '{unit}' no reconocida; agregarla tras confirmarla")
-    factor = PRECIP_UNIT_TO_MM_DAY[unit]
-    if factor is None:
+    for v in VARIABLES.values():
+        if unit in v.conversions:
+            return v
+    raise ValueError(f"unidad '{unit}' no reconocida; agregarla tras confirmarla")
+
+
+def conversion(da: xr.DataArray) -> tuple[float, float]:
+    """(escala, desplazamiento) a la unidad estándar; ValueError si es desconocida o acumulada."""
+    v = variable_of(da)
+    unit = get_units(da)
+    conv = v.conversions[unit]
+    if conv is None:
         raise ValueError(f"unidad '{unit}' es acumulada: desacumular antes de comparar")
-    return factor
+    return conv
 
 
-def is_temperature(da: xr.DataArray) -> bool:
-    return get_units(da) in TEMP_UNIT_TO_C
+def apply_conversion(values, conv: tuple[float, float]):
+    scale, offset = conv
+    if scale != 1.0:
+        values = values * scale
+    if offset != 0.0:
+        values = values + offset
+    return values
 
 
 def to_standard(da: xr.DataArray, values):
-    if is_temperature(da):
-        return values + TEMP_UNIT_TO_C[get_units(da)]
-    return values * unit_factor(da)
+    return apply_conversion(values, conversion(da))
 
+
+def unit_factor(da: xr.DataArray) -> float:
+    """Factor a mm/día de una unidad de precipitación; ValueError si falta, no se reconoce o es acumulada."""
+    if variable_of(da).key != "precipitation":
+        raise ValueError(f"unidad '{get_units(da)}' no es de precipitación")
+    return conversion(da)[0]
+
+
+def is_temperature(da: xr.DataArray) -> bool:
+    return get_units(da) in VARIABLES["temperature"].conversions
+
+
+# ---------------------------------------------------------------------------------------------
+# Regiones y nombres de archivo
+# ---------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Region:
+    """`name` va en los nombres de archivo; `area` es None para global."""
+    name: str
+    area: dict | None
+
+    def bounds(self) -> str:
+        if self.area is None:
+            return "global"
+        a = self.area
+        return f"N {a['north']}, W {a['west']}, S {a['south']}, E {a['east']}"
+
+
+def _num(x: float) -> str:
+    return f"{x:g}"
+
+
+def parse_box(text: str) -> dict:
+    """'N,W,S,E' (grados, longitudes con signo) -> dict; ValueError si no es un cuadro válido."""
+    parts = [p.strip() for p in text.split(",")]
+    if len(parts) != 4:
+        raise ValueError(f"cuadro '{text}': se esperan 4 valores N,W,S,E")
+    try:
+        n, w, s, e = (float(p) for p in parts)
+    except ValueError:
+        raise ValueError(f"cuadro '{text}': valores no numéricos") from None
+    if not (-90 <= s < n <= 90):
+        raise ValueError(f"cuadro '{text}': se requiere -90 <= sur < norte <= 90")
+    if not (-180 <= w < e <= 180):
+        raise ValueError(f"cuadro '{text}': se requiere -180 <= oeste < este <= 180 "
+                         "(longitudes con signo, sin cruzar el antimeridiano)")
+    return {"north": n, "west": w, "south": s, "east": e}
+
+
+def resolve_region(cfg: dict, spec: str | None = None, default: str = "prueba") -> Region:
+    """Región por nombre ('prueba', 'global' o una de `cpt.regions`) o por cuadro 'N,W,S,E'."""
+    spec = spec or default
+    if spec == "global":
+        return Region("global", None)
+    if spec == "prueba":
+        return Region("box", dict(cfg["area"]))
+    named = cfg.get("cpt", {}).get("regions", {})
+    if spec in named:
+        return Region(spec, dict(named[spec]))
+    if "," in spec:
+        a = parse_box(spec)
+        name = f"N{_num(a['north'])}_W{_num(a['west'])}_S{_num(a['south'])}_E{_num(a['east'])}"
+        return Region(name, a)
+    raise ValueError(f"región '{spec}' desconocida: usa prueba, global, "
+                     f"{', '.join(named) or '(ninguna con nombre)'} o un cuadro N,W,S,E")
+
+
+def raw_path(out_dir: Path, centre: str, variable: str, month: int, region: Region,
+             forecast_year: int | None = None) -> Path:
+    """GRIB crudo del CDS. `forecast_year` -> pronóstico de ese año; si no, hindcast."""
+    tag = f"f{forecast_year}{month:02d}" if forecast_year else f"m{month:02d}"
+    return out_dir / f"{centre}_{variable}_{tag}_{region.name}.grib"
+
+
+def chirps_path(out_dir: Path, year: int | str, region: Region) -> Path:
+    """CHIRPS recortado de un año; `year="*"` da el patrón para buscar todos los años."""
+    return out_dir / f"chirps_v3_{year}_{region.name}.nc"
+
+
+def processed_path(out_dir: Path, variable: str, month: int, region: Region) -> Path:
+    return out_dir / f"homogeneizado_{variable}_m{month:02d}_{region.name}.nc"
+
+
+# ---------------------------------------------------------------------------------------------
+# Lectura
+# ---------------------------------------------------------------------------------------------
 
 def open_grib(path: Path) -> xr.Dataset:
     return xr.open_dataset(path, engine="cfgrib", backend_kwargs={"indexpath": ""})

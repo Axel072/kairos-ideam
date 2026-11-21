@@ -62,19 +62,21 @@ def test_season_mean_averages_members_and_leads():
     np.testing.assert_allclose(m.values, np.mean([2, 3, 4, 102, 103, 104]))
 
 
-def test_region_args():
-    cfg = {"cpt": {"regions": {"colombia": {"north": 14, "west": -82, "south": -5, "east": -66}}}}
-    assert cpt.region_args(cfg, "global") == {"use_area": False, "region": "global"}
-    assert cpt.region_args(cfg, "prueba") == {"use_area": True, "region": "box"}
-    assert cpt.region_args(cfg, "colombia")["area"]["north"] == 14
-
-
 def test_write_log_reports_members(tmp_path):
     cfg = {"centres": {"ncep": {"system": "2"}}, "cpt": {"regions": {}},
            "area": {"north": 6, "west": -76, "south": 0, "east": -70}}
     files = {"ncep": {"X": tmp_path / "X.txt", "Z": tmp_path / "Z.txt"}}
-    log = cpt.write_log(tmp_path / "r.md", cfg, "precipitation", 2026, 10, [2, 3, 4], "prueba",
+    region = cpt.resolve_region(cfg, "prueba")
+    log = cpt.write_log(tmp_path / "r.md", cfg, "precipitation", 2026, 10, [2, 3, 4], region,
                         ["ncep"], {"ncep": (24, 120)}, files, _field(np.zeros((2, 2, 2))))
     text = log.read_text(encoding="utf-8")
     assert "| ncep | 2 | 24 | 120 | X.txt | Z.txt |" in text
     assert "2026-11/2027-01" in text and "1993–1994" in text
+    assert "N 6, W -76, S 0, E -70" in text
+
+
+def test_season_mean_equals_mean_of_monthly_values():
+    out = homogenize.reduce_lagged(_lagged_ds(), 5, 6)
+    monthly = homogenize.monthly_mean(out)
+    np.testing.assert_allclose(cpt.season_mean(out, [2, 3]).values,
+                               monthly.sel(lead=[2, 3]).mean("lead").values)

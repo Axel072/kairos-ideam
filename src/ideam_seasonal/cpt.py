@@ -1,6 +1,6 @@
 """
 Uso:  python -m ideam_seasonal.cpt [--modelo ncep|dwd|bom] [--variable precipitation|temperature]
-                                   [--region colombia|prueba|global]
+                                   [--region colombia|prueba|global|N,W,S,E]
 """
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from ideam_seasonal.common import CENTRES, open_grib
-from ideam_seasonal.homogenize import reduce_lagged
-from ideam_seasonal.ingest import download, latest_forecast, load_config
+from ideam_seasonal.common import CENTRES, Region, load_config, open_grib, resolve_region
+from ideam_seasonal.homogenize import monthly_mean, reduce_lagged
+from ideam_seasonal.ingest import download, latest_forecast
 from ideam_seasonal.verify import verify
 
 CPT_HEADER = "xmlns:cpt=http://iri.columbia.edu/CPT/v10/"
@@ -23,8 +23,8 @@ ENSEMBLE = "promedio"
 
 
 def season_mean(ds: xr.Dataset, leads: list[int]) -> xr.DataArray:
-    name = "tas" if "tas" in ds else "pr"
-    return ds[name].sel(lead=leads).mean(("member", "lead"), keep_attrs=True)
+    """Temporada: promedio de los valores mensuales (`monthly_mean`) de los leads dados."""
+    return monthly_mean(ds).sel(lead=leads).mean("lead", keep_attrs=True)
 
 
 def season_label(year: int, start_month: int, leads: list[int]) -> str:
@@ -70,22 +70,9 @@ def ensemble(fields: dict[str, xr.DataArray]) -> xr.DataArray:
     return out
 
 
-def region_args(cfg: dict, region: str) -> dict:
-    if region == "global":
-        return {"use_area": False, "region": "global"}
-    if region == "prueba":
-        return {"use_area": True, "region": "box"}
-    return {"use_area": True, "area": cfg["cpt"]["regions"][region], "region": region}
-
-
 def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads: list[int],
-              region: str, centres: list[str], members: dict, files: dict,
+              region: Region, centres: list[str], members: dict, files: dict,
               grid: xr.DataArray) -> Path:
-    if region == "global":
-        bounds = "global"
-    else:
-        a = cfg["cpt"]["regions"][region] if region != "prueba" else cfg["area"]
-        bounds = f"N {a['north']}, W {a['west']}, S {a['south']}, E {a['east']}"
     y0, y1 = (int(v) for v in grid["year"].values[[0, -1]])
     corrida = "A" if len(centres) == 1 else "A y B"
     lines = [f"# Registro de corrida: {variable}, inicio {year}-{month:02d}", "",
@@ -95,7 +82,7 @@ def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads
              f"| Variable | {variable} ({grid.attrs.get('units', '')}) |",
              f"| Inicio del pronóstico | {year}-{month:02d} |",
              f"| Temporada | {season_label(year, month, leads)} (leads {', '.join(map(str, leads))}) |",
-             f"| Región | {region}: {bounds} |",
+             f"| Región | {region.name}: {region.bounds()} |",
              f"| Rejilla | {grid.sizes['lat']} × {grid.sizes['lon']} celdas |",
              f"| Años del hindcast | {y0}–{y1} |",
              "",
@@ -119,12 +106,12 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
     cfg = load_config()
     leads = cfg["cpt"]["season_leads"]
     n_leads = len(cfg["leadtime_months"])
-    region = region or cfg["cpt"]["region"]
-    reg = region_args(cfg, region)
+    reg = resolve_region(cfg, region, default=cfg["cpt"]["region"])
 
-    year, month, z_raw = latest_forecast(cfg, centres, variable, force=force, **reg)
+    year, month, z_raw = latest_forecast(cfg, centres, variable, region=reg, force=force)
     print(f"Pronóstico más reciente: inicio {year}-{month:02d}")
-    x_raw = {c: download(cfg, c, variable, force=force, month=month, **reg) for c in centres}
+    x_raw = {c: download(cfg, c, variable, region=reg, force=force, month=month)
+             for c in centres}
 
     for p in [*x_raw.values(), *z_raw.values()]:
         if not verify(p):
@@ -139,13 +126,13 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
     if len(centres) > 1:
         x[ENSEMBLE], z[ENSEMBLE] = ensemble(x), ensemble(z)
 
-    tag = f"{variable}_i{year}{month:02d}_{region}"
+    tag = f"{variable}_i{year}{month:02d}_{reg.name}"
     files = {}
     for name in x:
         files[name] = {kind: write_cpt(data[name], out_dir / f"{kind}_{name}_{tag}.txt",
                                        f"{variable}_{name}", month, leads)
                        for kind, data in (("X", x), ("Z", z))}
-    log = write_log(out_dir / f"registro_{tag}.md", cfg, variable, year, month, leads, region,
+    log = write_log(out_dir / f"registro_{tag}.md", cfg, variable, year, month, leads, reg,
                     centres, members, files, x[centres[0]])
     return [p for f in files.values() for p in f.values()] + [log]
 
@@ -157,9 +144,15 @@ def main() -> None:
                    help="solo ese modelo (X y Z); sin esta opción, los tres y el promedio")
     p.add_argument("--force", action="store_true", help="ignora la caché de data/raw/")
     p.add_argument("--variable", choices=["precipitation", "temperature", "ambas"], default="ambas")
-    p.add_argument("--region", choices=["colombia", "prueba", "global"],
-                   help="por defecto la de config/params.yaml (cpt.region)")
+    p.add_argument("--region",
+                   help="colombia, prueba, global o un cuadro N,W,S,E (p. ej. 5,-75,-2,-70); "
+                        "por defecto la de config/params.yaml (cpt.region)")
     a = p.parse_args()
+    cfg = load_config()
+    try:
+        resolve_region(cfg, a.region, default=cfg["cpt"]["region"])
+    except ValueError as e:
+        p.error(str(e))
     variables = ["precipitation", "temperature"] if a.variable == "ambas" else [a.variable]
     for v in variables:
         for path in build([a.modelo] if a.modelo else list(CENTRES), v, force=a.force,

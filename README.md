@@ -44,7 +44,9 @@ El script se detiene en el primer paso que falle (`set -e`) y ejecuta, en orden:
 3. **Homogeneización** (`homogenize`): reduce NCEP, DWD y BOM a (año, miembro, anticipación),
    pasa todo a mm/día y promedia CHIRPS a la celda de 1° de los modelos. Escribe
    `data/processed/homogeneizado_precipitation_m05_box.nc`, con un grupo por fuente (`ncep`,
-   `dwd`, `bom`, `chirps`, `chirps_1deg`).
+   `dwd`, `bom`, `chirps`, `chirps_1deg`). En cada modelo, `pr` guarda todos los miembros y
+   `pr_mensual` el valor mensual: promedio simple de todos los miembros e inicializaciones
+   (decisión del cliente; es el mismo promedio que usan los archivos de CPT).
 4. **Informe de control de calidad** (`verify --report`): escribe
    `docs/informe_control_calidad.md`.
 
@@ -57,6 +59,7 @@ temperatura), con el pronóstico más reciente del CDS y el hindcast del mismo m
 ```
 bash cpt.sh                  # los tres modelos y el promedio
 bash cpt.sh --modelo ncep    # solo NCEP
+bash cpt.sh --region 5,-75,-2,-70   # cuadro propio N,W,S,E (longitudes con signo)
 ```
 
 Escribe en `data/cpt/` los archivos y un `registro_*.md` por variable. Temporada y región
