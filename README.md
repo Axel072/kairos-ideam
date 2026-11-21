@@ -54,6 +54,7 @@ Se pueden combinar; cada una reemplaza el valor de `params.yaml` solo en esa cor
 | `-a`, `--anios` | `1995-2015` (periodo del hindcast) | el de los centros (1993-2016) |
 | `-o`, `--salida` | `otra/carpeta` | `data/cpt` |
 | `-f`, `--force` | | usa la caché de `data/raw/` |
+| `--cpt` | | no corre CPT |
 
 Ejemplos:
 
@@ -96,6 +97,33 @@ python -m ideam_seasonal.verify --predictando 11   # 11 = mes de inicio del pron
 
 Temperatura todavía no tiene Y: se escriben solo X y Z y el registro lo indica.
 
+### Corridas de prueba en CPT
+
+```
+bash kairos.sh --cpt
+```
+
+Además de escribir los archivos, corre CPT batch (ruta en `config/params.yaml`, `cpt_batch`)
+para cada variable que tenga Y: corrida A con cada modelo y corrida B con el promedio. Método
+PCR con validación cruzada y modos X de `cpt_batch.x_modes`; el resto de ajustes es el
+`cpt.ini` de la instalación de CPT y queda impreso en cada log. Son corridas de prueba de
+ingreso: el Goodness Index que se informa no es una verificación de destreza.
+
+Cada corrida queda en `data/cpt/corridas_cpt/<modelo>_<etiqueta>/` con las copias de X, Y y
+Z, la secuencia de opciones que recibió CPT (`cpt_entrada.txt`), su salida completa
+(`cpt_salida.log`), lo que CPT leyó (`X_leido_por_cpt.txt`, `Y_…`, `Z_…`), el pronóstico y
+las probabilidades por tercil. En cada corrida se comprueba:
+
+- X y Z leídos por CPT = los archivos escritos, valor por valor;
+- Y: la temporada que arma CPT = la **suma** de los meses del Y mensual (CPT suma; el
+  pronóstico queda como total de la temporada en mm);
+- que el pronóstico exista para todas las estaciones y sus probabilidades sumen 100 %.
+
+El resumen está en `data/cpt/registro_cpt_<etiqueta>.md`. Si CPT no está instalado, pide
+una entrada no prevista o informa un error, el comando termina con `ERROR` y el motivo.
+En Linux, `cpt_batch.exe` debe apuntar a `CPT.x` y `cpt_batch.bin_dir` a la carpeta de
+`cpt.ini`.
+
 ### Control de calidad de la Fase 2
 
 ```
@@ -132,6 +160,7 @@ src/ideam_seasonal/
   verify.py               chequeos de GRIB y del Y, informe
   homogenize.py           reducción de ensambles, valor mensual y dataset homogeneizado
   cpt.py                  escritura en formato CPT y registro de corrida
+  cpt_run.py              corridas de prueba en CPT batch y validación de lo que lee CPT
 tests/
 docs/                     predictando (Y) del IDEAM
 data/                     no se versiona (raw/ descargas, processed/, cpt/)

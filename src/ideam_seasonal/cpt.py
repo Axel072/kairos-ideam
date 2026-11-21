@@ -145,8 +145,13 @@ def hindcast_years(cfg: dict, centres: list[str], years: tuple[int, int] | None)
 def build(centres: list[str], variable: str = "precipitation", force: bool = False,
           out_dir: Path = Path("data") / "cpt", region: str | None = None,
           start: tuple[int, int] | None = None, leads: list[int] | None = None,
-          years: tuple[int, int] | None = None, command: str | None = None) -> list[Path]:
-    """X, Z (y verificación del Y) en formato CPT. Lo que no se pase sale de params.yaml."""
+          years: tuple[int, int] | None = None, command: str | None = None,
+          run_cpt: bool = False) -> list[Path]:
+    """X, Z (y verificación del Y) en formato CPT. Lo que no se pase sale de params.yaml.
+
+    Con `run_cpt`, además corre las corridas de prueba en CPT batch (A: cada modelo,
+    B: promedio) para las variables que tienen Y; ValueError si alguna no pasa.
+    """
     cfg = load_config()
     leads = leads or cfg["cpt"]["season_leads"]
     n_leads = len(cfg["leadtime_months"])
@@ -190,7 +195,20 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
     log = write_log(out_dir / f"registro_{tag}.md", cfg, variable, year, month, leads, reg,
                     centres, members, files, x[centres[0]], predictand=y_path,
                     command=command, start_mode=start_mode)
-    return [p for f in files.values() for p in f.values()] + [log]
+    written = [p for f in files.values() for p in f.values()] + [log]
+    if run_cpt:
+        if y_path is None:
+            print(f"[--] {variable}: sin Y no se puede correr CPT; se omiten las corridas")
+            return written
+        from ideam_seasonal.cpt_run import run_all
+
+        results, cpt_log = run_all(files, y_path, out_dir, variable, tag, reg, cfg["cpt_batch"],
+                                   [int(v) for v in x[centres[0]]["year"].values], command)
+        written.append(cpt_log)
+        failed = [r.name for r in results if not r.ok]
+        if failed:
+            raise ValueError(f"corridas de CPT con fallas: {', '.join(failed)} (ver {cpt_log})")
+    return written
 
 
 if __name__ == "__main__":

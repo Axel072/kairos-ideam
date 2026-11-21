@@ -11,6 +11,7 @@ Ejemplos:
   bash kairos.sh --modelo ncep,dwd                 dos modelos y su promedio
   bash kairos.sh --inicio 2026-10 --temporada 2-4  un inicio y una temporada concretos
   bash kairos.sh --anios 1995-2015 --salida otra/carpeta
+  bash kairos.sh --cpt                             además, corridas de prueba en CPT batch
   bash kairos.sh qc [--force]                      control de calidad de la Fase 2
 """
 from __future__ import annotations
@@ -104,6 +105,9 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
                    help="carpeta de los archivos CPT. Por defecto: data/cpt")
     p.add_argument("-f", "--force", action="store_true",
                    help="vuelve a descargar aunque el archivo esté en data/raw/")
+    p.add_argument("--cpt", action="store_true",
+                   help="además corre las corridas de prueba en CPT batch (A: cada modelo, "
+                        "B: promedio) y valida lo que lee CPT. Solo variables con Y")
     return p
 
 
@@ -130,7 +134,7 @@ def run_cpt(args: argparse.Namespace, command: str) -> list[Path]:
         print(f"\n== {v} ==")
         written += cpt.build(models, v, force=args.force, out_dir=args.salida,
                              region=args.region, start=args.inicio, leads=args.temporada,
-                             years=args.anios, command=command)
+                             years=args.anios, command=command, run_cpt=args.cpt)
     return written
 
 

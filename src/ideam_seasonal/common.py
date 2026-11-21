@@ -218,6 +218,34 @@ def _cpt_tags(line: str) -> dict[str, str]:
     return tags
 
 
+def read_cpt_grid(path: Path) -> dict[str, xr.DataArray]:
+    """Archivo CPT de rejilla -> {cpt:T: DataArray (lat, lon)}, latitudes de norte a sur.
+
+    Lee tanto los archivos que escribe `cpt.write_cpt` como los que escribe CPT (donde las
+    etiquetas de un bloque se heredan del anterior si no se repiten).
+    """
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    out, tags, i = {}, {}, 0
+    while i < len(lines):
+        ln = lines[i]
+        if ln.startswith("cpt:") and "cpt:T=" in ln:
+            tags.update(_cpt_tags(ln))
+            nrow, ncol = int(tags["nrow"]), int(tags["ncol"])
+            lon = np.array([float(v) for v in lines[i + 1].split("\t")[1:ncol + 1]])
+            rows = [r.split("\t") for r in lines[i + 2:i + 2 + nrow]]
+            lat = np.array([float(r[0]) for r in rows])
+            vals = np.array([[float(v) for v in r[1:ncol + 1]] for r in rows])
+            if "missing" in tags:
+                vals[vals == float(tags["missing"])] = np.nan
+            da = xr.DataArray(vals, dims=("lat", "lon"), coords={"lat": lat, "lon": lon},
+                              attrs={"units": tags.get("units")})
+            out[tags["T"]] = da.sortby("lat", ascending=False)
+            i += 2 + nrow
+        else:
+            i += 1
+    return out
+
+
 def open_cpt_stations(path: Path) -> xr.DataArray:
     """Lee un archivo CPT de estaciones (un campo, serie mensual) -> DataArray (time, station).
 

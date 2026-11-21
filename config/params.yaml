@@ -28,6 +28,14 @@ chirps:
 predictand:
   precipitation: docs/PtandoY_Climatologia_Precipitacion_10_Estaciones_IDEAM.txt
 
+# CPT batch (corridas de prueba de ingreso: `bash kairos.sh --cpt`). En Linux, `exe` es la
+# ruta de CPT.x y `bin_dir` la carpeta donde está cpt.ini.
+cpt_batch:
+  exe: 'C:\CPT\CPT64_batch.exe'
+  bin_dir: 'C:\CPT'
+  x_modes: [1, 5]       # PCR: mínimo y máximo de modos X (CPT elige el mejor por validación cruzada)
+  timeout_s: 900
+
 cpt:
   season_leads: [2, 3, 4]
   region: colombia
