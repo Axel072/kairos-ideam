@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from ideam_seasonal import nmme
 from ideam_seasonal.common import (Region, load_config, open_grib, predictand_path,
                                    resolve_region)
 from ideam_seasonal.homogenize import monthly_mean, reduce_lagged
@@ -17,6 +18,7 @@ from ideam_seasonal.verify import verify, verify_predictand
 CPT_HEADER = "xmlns:cpt=http://iri.columbia.edu/CPT/v10/"
 MISSING = -999.0
 ENSEMBLE = "promedio"
+ENSEMBLE_C = "promedio_nmme"
 
 
 def season_mean(ds: xr.Dataset, leads: list[int]) -> xr.DataArray:
@@ -69,9 +71,10 @@ def ensemble(fields: dict[str, xr.DataArray]) -> xr.DataArray:
 def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads: list[int],
               region: Region, centres: list[str], members: dict, files: dict,
               grid: xr.DataArray, predictand: Path | None = None,
-              command: str | None = None, start_mode: str = "más reciente") -> Path:
+              command: str | None = None, start_mode: str = "más reciente",
+              nmme_status: dict[str, str] | None = None) -> Path:
     y0, y1 = (int(v) for v in grid["year"].values[[0, -1]])
-    corrida = "A" if len(centres) == 1 else "A y B"
+    corrida = "A" if len(centres) == 1 else "A, B y C" if nmme_status else "A y B"
     y_text = (f"{predictand.name} (verificado)" if predictand
               else "sin definir para esta variable: solo se escriben X y Z")
     lines = [f"# Registro de corrida: {variable}, inicio {year}-{month:02d}", "",
@@ -95,11 +98,20 @@ def write_log(path: Path, cfg: dict, variable: str, year: int, month: int, leads
         if name == ENSEMBLE:
             system = "media de " + " + ".join(c.upper() for c in centres)
             mx = mz = "—"
+        elif name == nmme.NAME:
+            system = "media de " + " + ".join(m for m, st in nmme_status.items() if st == "entra")
+            mx = mz = "media del ensamble"
+        elif name == ENSEMBLE_C:
+            system = "media de " + " + ".join([*(c.upper() for c in centres), "NMME"])
+            mx = mz = "—"
         else:
             system = cfg["centres"][name]["system"]
             mx, mz = members[name]
         lines.append(f"| {name} | {system} | {mx} | {mz} | {files[name]['X'].name} | "
                      f"{files[name]['Z'].name} |")
+    if nmme_status:
+        lines += ["", "NMME (IRI Data Library), modelos con hindcast y pronóstico completos:", ""]
+        lines += [f"- {m}: {st}" for m, st in nmme_status.items()]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -140,7 +152,7 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
           out_dir: Path = Path("data") / "cpt", region: str | None = None,
           start: tuple[int, int] | None = None, leads: list[int] | None = None,
           years: tuple[int, int] | None = None, command: str | None = None,
-          run_cpt: bool = False) -> list[Path]:
+          run_cpt: bool = False, use_nmme: bool = True) -> list[Path]:
     """Lo que no se pase sale de params.yaml. `run_cpt`: corridas de prueba en CPT batch."""
     cfg = load_config()
     leads = leads or cfg["cpt"]["season_leads"]
@@ -167,8 +179,20 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
         hz = reduce_lagged(open_grib(z_raw[c]), month, n_leads)
         members[c] = (hx.sizes["member"], hz.sizes["member"])
         x[c], z[c] = season_mean(hx, leads), season_mean(hz, leads)
+    nmme_status = None
     if len(centres) > 1:
         x[ENSEMBLE], z[ENSEMBLE] = ensemble(x), ensemble(z)
+        if use_nmme and "nmme" in cfg:
+            ref = x[centres[0]]
+            print("NMME (IRI Data Library) para la corrida C")
+            x[nmme.NAME], z[nmme.NAME], nmme_status = nmme.build(
+                cfg, variable, month, year, (y0, y1), leads, reg, ref["lat"].values,
+                ref["lon"].values, force=force)
+            for m, st in nmme_status.items():
+                print(f"  {m}: {st}")
+            members_c = [*centres, nmme.NAME]
+            x[ENSEMBLE_C] = ensemble({k: x[k] for k in members_c})
+            z[ENSEMBLE_C] = ensemble({k: z[k] for k in members_c})
 
     y_path = predictand_path(cfg, variable)
     if y_path is None:
@@ -184,7 +208,7 @@ def build(centres: list[str], variable: str = "precipitation", force: bool = Fal
                        for kind, data in (("X", x), ("Z", z))}
     log = write_log(out_dir / f"registro_{tag}.md", cfg, variable, year, month, leads, reg,
                     centres, members, files, x[centres[0]], predictand=y_path,
-                    command=command, start_mode=start_mode)
+                    command=command, start_mode=start_mode, nmme_status=nmme_status)
     written = [p for f in files.values() for p in f.values()] + [log]
     if run_cpt:
         if y_path is None:

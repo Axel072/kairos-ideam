@@ -35,8 +35,8 @@ bash kairos.sh
 
 Sin opciones baja del CDS el pronóstico más reciente publicado y el hindcast del mismo mes de
 inicio, verifica cada archivo, verifica el predictando (Y) y escribe en `data/cpt/` los
-archivos de entrada de CPT: X (hindcast) y Z (pronóstico) de NCEP, DWD, BOM y su promedio,
-para lluvia y temperatura, más un `registro_*.md` por variable. Todo lo que no se indique
+archivos de entrada de CPT: X (hindcast) y Z (pronóstico) de NCEP, DWD, BOM, su promedio, el
+NMME y el promedio con el NMME, para lluvia y temperatura, más un `registro_*.md` por variable. Todo lo que no se indique
 sale de `config/params.yaml`.
 
 ### Opciones
@@ -55,6 +55,7 @@ Se pueden combinar; cada una reemplaza el valor de `params.yaml` solo en esa cor
 | `-o`, `--salida` | `otra/carpeta` | `data/cpt` |
 | `-f`, `--force` | | usa la caché de `data/raw/` |
 | `--cpt` | | no corre CPT |
+| `--sin-nmme` | | descarga el NMME y escribe la corrida C |
 
 Ejemplos:
 
@@ -64,7 +65,16 @@ bash kairos.sh --region 5,-75,-2,-70             # cuadro propio
 bash kairos.sh --inicio 2026-10 --temporada 2-4  # inicio y temporada concretos
 ```
 
-Con más de un modelo se escribe también el promedio (peso igual por modelo). Con un cuadro
+Con más de un modelo se escribe también el promedio (peso igual por modelo).
+
+### NMME (corrida C)
+
+Con más de un modelo se descarga también el NMME de la IRI Data Library (sin cuenta), ya como
+media del ensamble y de la temporada, para el mismo inicio, años y región; los modelos están en
+`config/params.yaml` (`nmme.models`). Entra cada modelo que tenga el hindcast completo y el
+pronóstico de ese inicio; el NMME es su promedio simple, llevado por interpolación bilineal a la
+rejilla del CDS (centros en ,5). La corrida C es el promedio simple de NCEP, DWD, BOM y NMME
+(`X_promedio_nmme_…`, `Z_promedio_nmme_…`). El registro indica qué modelos del NMME entraron. Con un cuadro
 propio, las descargas se guardan aparte en `data/raw/` (no se mezclan con las de otra región).
 Una opción inválida se rechaza antes de descargar nada; si algo falla durante la corrida, el
 comando termina con `ERROR: <motivo>` y código de salida 1 sin escribir archivos CPT a medias.
@@ -104,7 +114,8 @@ bash kairos.sh --cpt
 ```
 
 Además de escribir los archivos, corre CPT batch (ruta en `config/params.yaml`, `cpt_batch`)
-para cada variable que tenga Y: corrida A con cada modelo y corrida B con el promedio. Método
+para cada variable que tenga Y: corrida A con cada modelo, corrida B con el promedio, el NMME
+solo como referencia y corrida C con el promedio con el NMME. Método
 PCR con validación cruzada y modos X de `cpt_batch.x_modes`; el resto de ajustes es el
 `cpt.ini` de la instalación de CPT y queda impreso en cada log. Son corridas de prueba de
 ingreso: el Goodness Index que se informa no es una verificación de destreza.
@@ -114,7 +125,8 @@ Z, la secuencia de opciones que recibió CPT (`cpt_entrada.txt`), su salida comp
 (`cpt_salida.log`), lo que CPT leyó (`X_leido_por_cpt.txt`, `Y_…`, `Z_…`), el pronóstico y
 las probabilidades por tercil. En cada corrida se comprueba:
 
-- X y Z leídos por CPT = los archivos escritos, valor por valor;
+- X y Z leídos por CPT = los archivos escritos, valor por valor (CPT 17 de Linux no exporta el Z
+  leído: se compara el número de celdas y pronósticos que informa al abrir `Z.txt`);
 - Y: la temporada que arma CPT = la **suma** de los meses del Y mensual (CPT suma; el
   pronóstico queda como total de la temporada en mm);
 - que el pronóstico exista para todas las estaciones y sus probabilidades sumen 100 %.
@@ -156,6 +168,7 @@ config/params.yaml        región, variables, años, centros, temporada, predict
 src/ideam_seasonal/
   kairos.py               opciones del comando único
   ingest.py               descarga (cdsapi y CHIRPS) y pronóstico más reciente
+  nmme.py                 NMME de la IRI Data Library para la corrida C
   common.py               configuración, variables, regiones, nombres de archivo, lectura
   verify.py               chequeos de GRIB y del Y, informe
   homogenize.py           reducción de ensambles, valor mensual y dataset homogeneizado

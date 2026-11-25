@@ -39,3 +39,16 @@ cpt:
   region: colombia
   regions:
     colombia: {north: 14, west: -82, south: -5, east: -66}
+
+# NMME para la corrida C (IRI Data Library); entra cada modelo con hindcast y pronóstico completos
+nmme:
+  url: https://iridl.ldeo.columbia.edu/SOURCES/.Models/.NMME
+  variables: {precipitation: prec, temperature: tref}
+  timeout_s: 600
+  models:
+    NCEP-CFSv2:       {hindcast: .NCEP-CFSv2/.HINDCAST/.PENTAD_SAMPLES_FULL, forecast: .NCEP-CFSv2/.FORECAST/.EARLY_MONTH_SAMPLES/.MONTHLY}
+    GFDL-SPEAR:       {hindcast: .GFDL-SPEAR/.HINDCAST/.MONTHLY, forecast: .GFDL-SPEAR/.FORECAST/.MONTHLY}
+    NASA-GEOSS2S:     {hindcast: .NASA-GEOSS2S/.HINDCAST/.MONTHLY, forecast: .NASA-GEOSS2S/.FORECAST/.MONTHLY}
+    CanSIPS-IC4:      {hindcast: .CanSIPS-IC4/.HINDCAST/.MONTHLY, forecast: .CanSIPS-IC4/.FORECAST/.MONTHLY}
+    COLA-RSMAS-CCSM4: {hindcast: .COLA-RSMAS-CCSM4/.MONTHLY, forecast: .COLA-RSMAS-CCSM4/.MONTHLY}
+    COLA-RSMAS-CESM1: {hindcast: .COLA-RSMAS-CESM1/.MONTHLY, forecast: .COLA-RSMAS-CESM1/.MONTHLY}

@@ -10,6 +10,7 @@ Ejemplos:
   bash kairos.sh --inicio 2026-10 --temporada 2-4  un inicio y una temporada concretos
   bash kairos.sh --anios 1995-2015 --salida otra/carpeta
   bash kairos.sh --cpt                             además, corridas de prueba en CPT batch
+  bash kairos.sh --sin-nmme                        sin la corrida C (NMME)
   bash kairos.sh qc [--force]                      control de calidad de la Fase 2
 """
 from __future__ import annotations
@@ -95,7 +96,10 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
                    help="vuelve a descargar aunque el archivo esté en data/raw/")
     p.add_argument("--cpt", action="store_true",
                    help="además corre las corridas de prueba en CPT batch (A: cada modelo, "
-                        "B: promedio) y valida lo que lee CPT. Solo variables con Y")
+                        "B: promedio, C: promedio con NMME) y valida lo que lee CPT. "
+                        "Solo variables con Y")
+    p.add_argument("--sin-nmme", action="store_true",
+                   help="no descarga el NMME ni escribe la corrida C")
     return p
 
 
@@ -118,7 +122,8 @@ def run_cpt(args: argparse.Namespace, command: str) -> list[Path]:
         print(f"\n== {v} ==")
         written += cpt.build(models, v, force=args.force, out_dir=args.salida,
                              region=args.region, start=args.inicio, leads=args.temporada,
-                             years=args.anios, command=command, run_cpt=args.cpt)
+                             years=args.anios, command=command, run_cpt=args.cpt,
+                             use_nmme=not args.sin_nmme)
     return written
 
 

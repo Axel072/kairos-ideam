@@ -114,3 +114,23 @@ def test_real_cpt_run_if_installed(tmp_path):
                         list(range(1993, 2017)))
     assert r.ok, r.checks
     assert r.goodness is not None and len(r.forecast) == 10
+
+
+def test_batch_input_cpt17_has_no_z_output():
+    lines = cpt_run.batch_input(CFG["area"], (1, 5), cpt_run.OUTPUTS_17).splitlines()
+    assert "Z_leido_por_cpt" not in lines and "542" not in lines
+    assert lines[lines.index("511") + 1] == "pronostico"
+
+
+def test_forecast_file_read_cpt17(tmp_path):
+    z = cpt.write_cpt(_field(np.ones((1, 2, 2)), years=(2026,)), tmp_path / "Z.txt", "pr", 11, [2, 3, 4])
+    log = ("Forecast File\n Input Data      Z.txt\n Number of gridpoints   {n}\n"
+           " Training Data\n Number of forecasts   1\n")
+    assert cpt_run.forecast_file_read(z, log.format(n=4))[0]
+    assert not cpt_run.forecast_file_read(z, log.format(n=3))[0]
+    assert not cpt_run.forecast_file_read(z, "sin resumen")[0]
+
+
+def test_run_labels():
+    assert [cpt_run.run_label(n) for n in ("ncep", "promedio", "promedio_nmme", "nmme")] == \
+        ["A", "B", "C", "NMME"]
