@@ -98,3 +98,13 @@ def test_build_fails_without_models(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="ningún modelo NMME"):
         nmme.build(CFG, "precipitation", 10, 2026, (1993, 1994), [2, 3, 4], REGION,
                    np.array([0.5]), np.array([-82.5]))
+
+
+def test_open_season_drops_height_dimension(tmp_path):
+    path = tmp_path / "z.nc"
+    xr.Dataset({"tref": (("S", "L", "Z", "Y", "X"), np.full((1, 1, 1, 2, 2), 300.0),
+                         {"units": "Kelvin_scale"})},
+               coords={"S": [801], "L": [2.5], "Z": [2.0], "Y": [0.0, 1.0],
+                       "X": [277.0, 278.0]}).to_netcdf(path)
+    da = nmme.open_season(path, "temperature")
+    assert da.dims == ("year", "lat", "lon") and da.shape == (1, 2, 2)

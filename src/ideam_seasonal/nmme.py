@@ -69,7 +69,8 @@ def open_season(path: Path, variable: str) -> xr.DataArray:
     """(year, lat, lon) en las unidades de VARIABLES y longitudes -180..180."""
     ds = xr.open_dataset(path, decode_times=False)
     name = next(iter(ds.data_vars))
-    da = ds[name].squeeze("L", drop=True)
+    da = ds[name]
+    da = da.squeeze([d for d in da.dims if d not in ("S", "Y", "X") and da.sizes[d] == 1], drop=True)
     units = da.attrs.get("units", "")
     if units not in UNITS:
         raise ValueError(f"{path.name}: unidad NMME '{units}' no reconocida")
