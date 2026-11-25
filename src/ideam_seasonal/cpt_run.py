@@ -19,6 +19,9 @@ from ideam_seasonal.common import Region, open_cpt_stations, read_cpt_grid
 # CPT agrega ".txt"
 OUTPUTS = {"101": "X_leido_por_cpt", "102": "Y_leido_por_cpt", "542": "Z_leido_por_cpt",
            "511": "pronostico", "501": "probabilidades"}
+# CPT 17 (Linux) no exporta el Z leído; su 542 es otra opción
+OUTPUTS_17 = {k: v for k, v in OUTPUTS.items() if k != "542"}
+RUN_LABEL = {"promedio": "B", "promedio_nmme": "C", "nmme": "NMME"}
 MAX_OUTPUT_BYTES = 5_000_000  # sin entrada, CPT repite la última pregunta sin fin
 GLOBAL_DOMAIN = {"north": 90, "south": -90, "west": -180, "east": 180}
 
@@ -41,8 +44,13 @@ class RunResult:
         return all(ok for ok, _ in self.checks.values())
 
 
-def batch_input(area: dict | None, x_modes: tuple[int, int]) -> str:
-    """Opciones de menú de CPT 18 (PCR)."""
+def run_label(name: str) -> str:
+    return RUN_LABEL.get(name, "A")
+
+
+def batch_input(area: dict | None, x_modes: tuple[int, int],
+                outputs: dict[str, str] = OUTPUTS) -> str:
+    """Opciones de menú de CPT (PCR); `outputs` = OUTPUTS_17 para CPT 17."""
     a = area or GLOBAL_DOMAIN
     dom = [a["north"], a["south"], a["west"], a["east"]]
     steps = ["612",                       # PCR
@@ -53,7 +61,7 @@ def batch_input(area: dict | None, x_modes: tuple[int, int]) -> str:
              "311",                        # validación cruzada
              "451",                        # pronósticos
              "111"]                        # guardar resultados
-    for code, name in OUTPUTS.items():
+    for code, name in outputs.items():
         steps += [code, name]
     steps += ["0", "0"]                    # salir
     return "\n".join(str(s) for s in steps) + "\n"
@@ -110,6 +118,30 @@ def run_cpt_batch(exe: Path, bin_dir: Path, run_dir: Path, stdin_text: str,
         line = next(ln for ln in out.splitlines() if re.search(r"\bERROR\b", ln))
         raise CPTError(f"CPT informó un error: {line.strip()} (log en {run_dir / 'cpt_salida.log'})")
     return out
+
+
+def cpt_version(exe: Path, bin_dir: Path, run_dir: Path, timeout_s: float = 60) -> int:
+    """Versión principal de CPT (17 en Linux, 18 en Windows)."""
+    out = run_cpt_batch(exe, bin_dir, run_dir, "0\n", timeout_s)
+    m = re.search(r"Version\s+(\d+)\.", out)
+    if not m:
+        raise CPTError(f"no se reconoce la versión de CPT en {exe}")
+    return int(m.group(1))
+
+
+def forecast_file_read(z: Path, out: str) -> tuple[bool, str]:
+    """CPT 17: compara el resumen del 'Forecast File' del log con Z.txt."""
+    m = re.search(r"Forecast File\s+Input Data\s+Z\.txt(.*?)Training Data", out, re.S)
+    n = re.search(r"Number of forecasts\s+(\d+)", out)
+    if not (m and n):
+        return False, "el log de CPT no muestra el Z abierto"
+    points = re.search(r"Number of gridpoints\s+(\d+)", m.group(1))
+    fields = read_cpt_grid(z)
+    size = next(iter(fields.values())).size
+    got = (int(points.group(1)) if points else -1, int(n.group(1)))
+    ok = got == (size, len(fields))
+    return ok, (f"CPT 17 abrió Z.txt con {got[0]} celdas y {got[1]} pronóstico(s); "
+                f"el archivo tiene {size} y {len(fields)}")
 
 
 def compare_grids(src: Path, cpt: Path) -> tuple[bool, str]:
@@ -170,23 +202,27 @@ def run_one(name: str, x: Path, y: Path, z: Path, run_dir: Path, batch_cfg: dict
     run_dir.mkdir(parents=True)
     for src, dst in ((x, "X.txt"), (y, "Y.txt"), (z, "Z.txt")):
         shutil.copyfile(src, run_dir / dst)
-    stdin_text = batch_input(region.area, tuple(batch_cfg["x_modes"]))
+    exe, bin_dir = Path(batch_cfg["exe"]), Path(batch_cfg["bin_dir"])
+    version = cpt_version(exe, bin_dir, run_dir)
+    outputs = OUTPUTS if version >= 18 else OUTPUTS_17
+    stdin_text = batch_input(region.area, tuple(batch_cfg["x_modes"]), outputs)
     (run_dir / "cpt_entrada.txt").write_text(stdin_text, encoding="utf-8")
-    out = run_cpt_batch(Path(batch_cfg["exe"]), Path(batch_cfg["bin_dir"]), run_dir, stdin_text,
-                        float(batch_cfg.get("timeout_s", 900)))
+    out = run_cpt_batch(exe, bin_dir, run_dir, stdin_text, float(batch_cfg.get("timeout_s", 900)))
 
     res = RunResult(name, run_dir)
     m = re.search(r"Goodness Index:\s+(-?[\d.]+)\s+\(using\s+(\d+)\s+X-modes\)", out)
     if m:
         res.goodness, res.n_modes = float(m.group(1)), int(m.group(2))
-    missing = [f"{n}.txt" for n in OUTPUTS.values() if not (run_dir / f"{n}.txt").exists()]
+    missing = [f"{n}.txt" for n in outputs.values() if not (run_dir / f"{n}.txt").exists()]
     res.checks["salidas"] = (not missing and m is not None and "Done!" in out,
                              "CPT terminó el cálculo y escribió sus salidas" if not missing
                              else f"faltan salidas de CPT: {', '.join(missing)}")
     if missing:
         return res
     res.checks["X leído = origen"] = compare_grids(run_dir / "X.txt", run_dir / "X_leido_por_cpt.txt")
-    res.checks["Z leído = origen"] = compare_grids(run_dir / "Z.txt", run_dir / "Z_leido_por_cpt.txt")
+    res.checks["Z leído = origen"] = (
+        compare_grids(run_dir / "Z.txt", run_dir / "Z_leido_por_cpt.txt") if "542" in outputs
+        else forecast_file_read(run_dir / "Z.txt", out))
     res.checks["Y leído = origen"] = compare_predictand(run_dir / "Y.txt",
                                                        run_dir / "Y_leido_por_cpt.txt", years)
     res.forecast = forecast_table(run_dir)
@@ -211,7 +247,7 @@ def write_log(path: Path, results: list[RunResult], variable: str, tag: str, reg
              "| Corrida | Modelo | Resultado | Goodness Index | Modos X | Carpeta |",
              "|---|---|---|---|---|---|"]
     for r in results:
-        kind = "B" if r.name == "promedio" else "A"
+        kind = run_label(r.name)
         good = f"{r.goodness:.3f}" if r.goodness is not None else "—"
         lines.append(f"| {kind} | {r.name} | {'OK' if r.ok else 'FALLA'} | {good} | "
                      f"{r.n_modes or '—'} | `{r.run_dir.name}` |")
@@ -238,7 +274,7 @@ def run_all(files: dict[str, dict[str, Path]], y: Path, out_dir: Path, variable:
     results = []
     base = out_dir / "corridas_cpt"
     for name, xz in files.items():
-        print(f"[cpt] corrida {'B' if name == 'promedio' else 'A'}: {name}")
+        print(f"[cpt] corrida {run_label(name)}: {name}")
         r = run_one(name, xz["X"], y, xz["Z"], base / f"{name}_{tag}", batch_cfg, region, years)
         for k, (ok, msg) in r.checks.items():
             print(f"  [{'OK' if ok else 'FALLA'}] {k}: {msg}")
