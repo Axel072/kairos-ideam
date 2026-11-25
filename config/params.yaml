@@ -23,8 +23,32 @@ chirps:
   url_template: "https://data.chc.ucsb.edu/products/CHIRPS/v3.0/monthly/global/netcdf/by_year/chirps-v3.0.{year}.monthly.nc"
   years: [1993, 2016]
 
+# Y para CPT por variable (entregado por el IDEAM), relativo a la raíz del repo
+predictand:
+  precipitation: docs/PtandoY_Climatologia_Precipitacion_10_Estaciones_IDEAM.txt
+
+# kairos.sh --cpt. En Linux: exe = CPT.x, bin_dir = carpeta de cpt.ini
+cpt_batch:
+  exe: 'C:\CPT\CPT64_batch.exe'
+  bin_dir: 'C:\CPT'
+  x_modes: [1, 5]       # PCR, mín. y máx.
+  timeout_s: 900
+
 cpt:
   season_leads: [2, 3, 4]
   region: colombia
   regions:
     colombia: {north: 14, west: -82, south: -5, east: -66}
+
+# NMME para la corrida C (IRI Data Library); entra cada modelo con hindcast y pronóstico completos
+nmme:
+  url: https://iridl.ldeo.columbia.edu/SOURCES/.Models/.NMME
+  variables: {precipitation: prec, temperature: tref}
+  timeout_s: 600
+  models:
+    NCEP-CFSv2:       {hindcast: .NCEP-CFSv2/.HINDCAST/.PENTAD_SAMPLES_FULL, forecast: .NCEP-CFSv2/.FORECAST/.EARLY_MONTH_SAMPLES/.MONTHLY}
+    GFDL-SPEAR:       {hindcast: .GFDL-SPEAR/.HINDCAST/.MONTHLY, forecast: .GFDL-SPEAR/.FORECAST/.MONTHLY}
+    NASA-GEOSS2S:     {hindcast: .NASA-GEOSS2S/.HINDCAST/.MONTHLY, forecast: .NASA-GEOSS2S/.FORECAST/.MONTHLY}
+    CanSIPS-IC4:      {hindcast: .CanSIPS-IC4/.HINDCAST/.MONTHLY, forecast: .CanSIPS-IC4/.FORECAST/.MONTHLY}
+    COLA-RSMAS-CCSM4: {hindcast: .COLA-RSMAS-CCSM4/.MONTHLY, forecast: .COLA-RSMAS-CCSM4/.MONTHLY}
+    COLA-RSMAS-CESM1: {hindcast: .COLA-RSMAS-CESM1/.MONTHLY, forecast: .COLA-RSMAS-CESM1/.MONTHLY}

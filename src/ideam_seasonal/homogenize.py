@@ -9,24 +9,45 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ideam_seasonal.common import (CENTRES, get_units, is_temperature, open_chirps, open_grib,
-                                   to_standard)
-from ideam_seasonal.ingest import load_config
+from ideam_seasonal.common import (CENTRES, VARIABLES, apply_conversion, chirps_path, conversion,
+                                   get_units, load_config, open_chirps, open_grib, processed_path,
+                                   raw_path, resolve_region, variable_of)
 
 
-def reduce_lagged(ds: xr.Dataset, start_month: int, n_leads: int) -> xr.Dataset:
-    """Reduce el producto cartesiano (number, time, step) a (year, member, lead)."""
-    var = next(iter(ds.data_vars))
-    da = ds[var]
-    unit = get_units(da)
-    to_standard(da, 0.0)
+def _lagged_arrays(ds: xr.Dataset):
+    """Un pronóstico con una sola inicialización llega sin dimensión `time`: se agrega."""
+    da = ds[next(iter(ds.data_vars))]
     if "time" not in da.dims:
         da = da.expand_dims("time")
         ds = ds.assign_coords(time=da["time"], valid_time=ds["valid_time"].expand_dims("time"))
     arr = da.transpose("number", "time", "step", "latitude", "longitude").values
     init = pd.DatetimeIndex(ds["time"].values)
     valid = pd.DatetimeIndex(ds["valid_time"].transpose("time", "step").values.ravel())
-    valid = valid.values.reshape(len(init), -1)
+    return da, arr, init, valid.values.reshape(len(init), -1)
+
+
+def _member_index(member, init: pd.DatetimeIndex, valid: np.ndarray, has: np.ndarray,
+                  years: np.ndarray, start_month: int, n_leads: int):
+    ti, si = np.nonzero(has)
+    vt = pd.DatetimeIndex(valid[ti, si])
+    if not ((vt.day == 1) & (vt.hour == 0)).all():
+        raise ValueError("valid_time no cae en el día 1 00 h; mapeo de anticipación dudoso")
+    yr = init.year[ti]
+    lead = (vt.year - yr) * 12 + vt.month - start_month  # fin de periodo - mes de inicio
+    if lead.min() < 1 or lead.max() > n_leads:
+        raise ValueError(f"member {member}: anticipación fuera de 1..{n_leads}: "
+                         f"{sorted(set(lead))}")
+    yi = np.searchsorted(years, yr)
+    if len(set(zip(yi, lead))) != len(yi):
+        raise ValueError(f"member {member}: (año, anticipación) duplicado")
+    return ti, si, yi, lead
+
+
+def reduce_lagged(ds: xr.Dataset, start_month: int, n_leads: int) -> xr.Dataset:
+    """(number, time, step) -> (year, member, lead); cada inicialización queda como miembro."""
+    da, arr, init, valid = _lagged_arrays(ds)
+    var = variable_of(da)
+    conv = conversion(da)  # falla antes de recorrer si la unidad no sirve
 
     has = ~np.isnan(arr).all(axis=(3, 4))  # (number, time, step)
     years = np.sort(np.unique(init.year))
@@ -34,39 +55,31 @@ def reduce_lagged(ds: xr.Dataset, start_month: int, n_leads: int) -> xr.Dataset:
     out = np.full((len(years), len(members), n_leads, arr.shape[3], arr.shape[4]), np.nan,
                   dtype="float32")
     init_time = np.full((len(years), len(members)), np.datetime64("NaT", "ns"))
-    for i, _ in enumerate(members):
-        ti, si = np.nonzero(has[i])
-        vt = pd.DatetimeIndex(valid[ti, si])
-        if not ((vt.day == 1) & (vt.hour == 0)).all():
-            raise ValueError("valid_time no cae en el día 1 00 h; mapeo de anticipación dudoso")
-        yr = init.year[ti]
-        lead = (vt.year - yr) * 12 + vt.month - start_month  # fin de periodo - mes de inicio
-        if lead.min() < 1 or lead.max() > n_leads:
-            raise ValueError(f"member {members[i]}: anticipación fuera de 1..{n_leads}: "
-                             f"{sorted(set(lead))}")
-        yi = np.searchsorted(years, yr)
-        if len(set(zip(yi, lead))) != len(yi):
-            raise ValueError(f"member {members[i]}: (año, anticipación) duplicado")
-        out[yi, i, lead - 1] = to_standard(da, arr[i, ti, si])
+    for i, member in enumerate(members):
+        ti, si, yi, lead = _member_index(member, init, valid, has[i], years, start_month, n_leads)
+        out[yi, i, lead - 1] = apply_conversion(arr[i, ti, si], conv)
         init_time[yi, i] = init[ti].values
-    partial = np.isnan(out).any(axis=(3, 4)) & ~np.isnan(out).all(axis=(3, 4))
     if np.isnan(out).any():
+        partial = np.isnan(out).any(axis=(3, 4)) & ~np.isnan(out).all(axis=(3, 4))
         raise ValueError(f"el arreglo reducido tiene {np.isnan(out).mean():.2%} NaN "
                          f"(celdas parciales: {int(partial.sum())}); no se rellena")
-    lat = ds["latitude"].values
-    if is_temperature(da):
-        name, units, long_name = "tas", "Celsius", "temperatura media del aire a 2 m"
-    else:
-        name, units, long_name = "pr", "mm/day", "precipitación, tasa media mensual"
+
     res = xr.Dataset(
-        {name: (("year", "member", "lead", "lat", "lon"), out,
-                {"units": units, "source_units": unit, "long_name": long_name}),
+        {var.short: (("year", "member", "lead", "lat", "lon"), out,
+                     {"units": var.units, "source_units": get_units(da),
+                      "long_name": var.long_name}),
          "init_time": (("year", "member"), init_time)},
         coords={"year": years, "member": members, "lead": np.arange(1, n_leads + 1),
-                "lat": lat, "lon": ds["longitude"].values})
+                "lat": ds["latitude"].values, "lon": ds["longitude"].values},
+        attrs={"variable": var.key})
     res = res.assign_coords(
         target_month=("lead", (start_month - 1 + np.arange(n_leads)) % 12 + 1))
     return res.sortby("lat")
+
+
+def monthly_mean(ds: xr.Dataset) -> xr.DataArray:
+    """Promedio simple de todos los miembros (decisión del cliente)."""
+    return ds[VARIABLES[ds.attrs["variable"]].short].mean("member", keep_attrs=True)
 
 
 def chirps_by_lead(paths: list[Path], years: np.ndarray, start_month: int, n_leads: int):
@@ -118,13 +131,14 @@ def build(raw: Path = Path("data") / "raw", processed: Path = Path("data") / "pr
           variable: str = "precipitation") -> Path:
     cfg = load_config()
     month, n_leads = cfg["month"], len(cfg["leadtime_months"])
-    out_path = processed / f"homogeneizado_{variable}_m{month:02d}_box.nc"
+    region = resolve_region(cfg, "prueba")
+    out_path = processed_path(processed, variable, month, region)
     processed.mkdir(parents=True, exist_ok=True)
     out_path.unlink(missing_ok=True)
 
     groups = {}
     for c in CENTRES:
-        groups[c] = reduce_lagged(open_grib(raw / f"{c}_{variable}_m{month:02d}_box.grib"),
+        groups[c] = reduce_lagged(open_grib(raw_path(raw, c, variable, month, region)),
                                   month, n_leads)
     years = groups["ncep"]["year"].values
     for c, g in groups.items():
@@ -135,14 +149,18 @@ def build(raw: Path = Path("data") / "raw", processed: Path = Path("data") / "pr
                 np.allclose(groups[c]["lon"], groups["ncep"]["lon"])):
             raise ValueError(f"{c}: rejilla distinta a NCEP")
 
-    ch = chirps_by_lead(sorted(raw.glob("chirps_v3_*_box.nc")), years, month, n_leads)
+    for c in CENTRES:
+        short = VARIABLES[groups[c].attrs["variable"]].short
+        groups[c][f"{short}_mensual"] = monthly_mean(groups[c])
+
+    ch = chirps_by_lead(sorted(raw.glob(chirps_path(raw, "*", region).name)), years, month, n_leads)
     groups["chirps"] = ch.to_dataset(name="pr")
     groups["chirps_1deg"] = chirps_to_model_grid(
         ch, groups["ncep"]["lat"].values, groups["ncep"]["lon"].values).to_dataset(name="pr")
 
     for i, (name, ds) in enumerate(groups.items()):
-        ds.attrs = {"source": name, "start_month": month, "nota": "no se corrigió ni normalizó "
-                    "nada; solo reducción de dimensiones y conversión a mm/día"}
+        ds.attrs.update({"source": name, "start_month": month, "nota": "no se corrigió ni "
+                         "normalizó nada; solo reducción de dimensiones y conversión a mm/día"})
         ds.to_netcdf(out_path, group=name, mode="w" if i == 0 else "a", engine="netcdf4")
     return out_path
 
